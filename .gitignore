@@ -2,3 +2,4 @@
 /logs/
 /scripts/.env
 .env
+**/__pycache__/
