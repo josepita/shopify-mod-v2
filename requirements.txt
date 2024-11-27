@@ -1,0 +1,6 @@
+mysql-connector-python==8.0.33
+pandas==2.0.3
+ShopifyAPI==12.3.0
+python-dotenv==1.0.0
+openpyxl==3.1.2
+xlrd==2.0.1

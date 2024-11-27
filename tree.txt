@@ -1,0 +1,25 @@
+.
+├── README.md
+├── config
+│   ├── __init__.py
+│   └── settings.py
+├── db
+│   ├── __init__.py
+│   ├── migrations.py
+│   ├── mysql_connector.py
+│   └── product_mapper.py
+├── log.txt
+├── logs
+│   └── shopify_sync.log
+├── main.py
+├── migrations_run.py
+├── requirements.txt
+├── tree.txt
+├── update-new.py
+├── update-original.py
+├── update_from_presta.py
+└── utils
+    ├── __init__.py
+    └── helpers.py
+
+4 directories, 18 files

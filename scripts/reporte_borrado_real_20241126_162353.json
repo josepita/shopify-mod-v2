@@ -1,0 +1,97 @@
+{
+  "fecha_ejecucion": "2024-11-26T16:23:53.000860",
+  "modo": "Real",
+  "tienda": "armaanjewell.myshopify.com",
+  "total_productos_procesados": 22,
+  "productos_procesados": [
+    {
+      "id": 8728606671066,
+      "title": "02000033 - Solitario oro amarillo cadete macizo brillo circonita 4.5 mm ancho 5.5 mm"
+    },
+    {
+      "id": 8728607129818,
+      "title": "02000034 - Solitario oro amarillo cadete circonita 4 mm sin forrar"
+    },
+    {
+      "id": 8728607228122,
+      "title": "02000035 - Solitario oro amarillo cadete macizo brillo circonita 4.2 mm ancho 5 mm"
+    },
+    {
+      "id": 8728607359194,
+      "title": "02000036 - Solitario oro amarillo cadete macizo brillo circonita 4.2 mm ancho 5 mm"
+    },
+    {
+      "id": 8728607523034,
+      "title": "02000090 - Alianza oro bicolor brillo y bordes estriados. 4 mm"
+    },
+    {
+      "id": 8728607883482,
+      "title": "07000021 - Sello oro amarillo hueco redondo tallado virgen del rocio 10x9 mm"
+    },
+    {
+      "id": 8728608047322,
+      "title": "07000028 - Sello oro amarillo caballero macizo oval. zona grabado: 12x6 mm"
+    },
+    {
+      "id": 8728608112858,
+      "title": "07000029 - Sello oro bicolor macizo caballero cuadrado. zona grabado: 12x12 mm"
+    },
+    {
+      "id": 8728608276698,
+      "title": "07000030 - Sello oro bicolor caballero macizo oval. zona grabado: 15,5 x 12mm"
+    },
+    {
+      "id": 8728608342234,
+      "title": "07000031 - Sello oro bicolor macizo rectangular. zona grabado: 12x10 mm"
+    },
+    {
+      "id": 8728608407770,
+      "title": "07000173 - Sortija sello oro amarillo piedra color hueco"
+    },
+    {
+      "id": 8728608506074,
+      "title": "07000198 - Sortija oro amarillo virgen tiscar"
+    },
+    {
+      "id": 8728608571610,
+      "title": "07000656 - Sello oro caballero amarillo hueco tallado virgen del rocio 13x11 mm"
+    },
+    {
+      "id": 8728608637146,
+      "title": "07000695 - Sello oro amarillo macizo tallado zona grabado 7.5 x 6 mm"
+    },
+    {
+      "id": 8728608833754,
+      "title": "07000720 - Alianza oro blanco circonitas 3 mm"
+    },
+    {
+      "id": 8728608932058,
+      "title": "07000722 - Alianza oro blanco matizada y filo central brillo 5mm"
+    },
+    {
+      "id": 8728609161434,
+      "title": "07000843 - Sello macizo caballero oro amarillo tallado. zona grabado: 13x12 mm"
+    },
+    {
+      "id": 8728609259738,
+      "title": "08000075 - Solitario oro amarillo macizo con motivos y circonita de 3 mm"
+    },
+    {
+      "id": 8728609390810,
+      "title": "08000076 - Solitario oro amarillo macizo con circonita de 4 mm"
+    },
+    {
+      "id": 8728609521882,
+      "title": "08000097 - Sello oro amarillo macizo tallado zona grabado oval 7.5 x 6.5 mm"
+    },
+    {
+      "id": 8728609587418,
+      "title": "08000098 - Sello oro amarillo macizo tallado zona grabado 7.5 x 6 mm"
+    },
+    {
+      "id": 8728609784026,
+      "title": "08000099 - Sello oro amarillo macizo tallado zona grabado redonda 7 mm"
+    }
+  ],
+  "errores": []
+}
