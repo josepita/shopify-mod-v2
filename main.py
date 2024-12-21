@@ -6,7 +6,7 @@ Script principal de sincronización de productos con Shopify
 Soporta productos simples y con variantes de talla
 Maneja múltiples formatos de archivo (XLS, XLSX, CSV)
 """
-
+import requests 
 import pandas as pd
 import sys
 import os
@@ -24,7 +24,8 @@ from db.product_mapper import ProductMapper
 from utils.helpers import (
     clean_value, format_price, validate_product_data, group_variants,
     format_title, process_tags, log_processing_stats, format_log_message,
-    get_variant_size, extract_measures, extract_diamond_info, extract_stones  # Añadida aquí
+    get_variant_size, extract_measures, extract_diamond_info, extract_stones, extract_zodiac_info,
+    extract_shapes_and_letters, extract_medal_figure, extract_medal_type, extract_pendant_type, extract_chain_type 
 )
 
 
@@ -144,8 +145,31 @@ def create_simple_product(
 ) -> bool:
     """
     Crea un producto simple (sin variantes) en Shopify
+    
+    Args:
+        product_data: Diccionario con los datos del producto
+        product_mapper: Instancia de ProductMapper para mapeo de productos
+        location_id: ID de la ubicación en Shopify
+        is_update: Indica si es una actualización de producto existente
+    
+    Returns:
+        bool: True si la creación fue exitosa, False en caso contrario
     """
     try:
+        # Convertir peso a gramos correctamente
+        try:
+            weight_in_grams = float(str(product_data.get('weight', 0)).replace(',', '.'))
+            if weight_in_grams < 0:
+                logging.warning(f"Peso negativo detectado para SKU {product_data['sku']}, ajustando a 0")
+                weight_in_grams = 0
+        except (ValueError, TypeError):
+            logging.warning(f"Error convirtiendo peso para SKU {product_data['sku']}, usando 0")
+            weight_in_grams = 0
+
+        print(f"\nProcesando peso para SKU {product_data['sku']}:")
+        print(f"- Peso original: {product_data.get('weight', 0)}")
+        print(f"- Peso convertido (g): {weight_in_grams}")
+
         new_product = shopify.Product()
         new_product.title = product_data['title']
         new_product.body_html = product_data['body_html']
@@ -159,7 +183,9 @@ def create_simple_product(
             'sku': product_data['sku'],
             'inventory_management': 'shopify',
             'inventory_policy': 'deny',
-            'grams': int(float(product_data.get('weight', 0))),
+            'grams': int(weight_in_grams),
+            'weight': weight_in_grams,
+            'weight_unit': 'g',
             'cost': product_data.get('cost', 0)
         })
         
@@ -185,11 +211,29 @@ def create_simple_product(
             
             # Crear metafields
             if product_data.get('metafields'):
-                create_product_metafields(new_product.id, product_data['metafields'])
+                #create_product_metafields(new_product.id, product_data['metafields'])
+                create_product_metafields_bulk(new_product.id, product_data['metafields'])
             
             # Configurar imágenes
             if product_data.get('images'):
                 setup_product_images(new_product.id, product_data['images'])
+
+            # Debuguear producto creado
+            updated_product = shopify.Product.find(new_product.id)
+            print("\nValores del producto creado:")
+            print(f"- ID: {updated_product.id}")
+            print(f"- SKU: {updated_product.variants[0].sku}")
+            print(f"- Weight (g): {updated_product.variants[0].weight}")
+            print(f"- Weight unit: {updated_product.variants[0].weight_unit}")
+            print(f"- Grams: {updated_product.variants[0].grams}")
+            
+            # Verificar coherencia de peso
+            if updated_product.variants[0].grams != int(weight_in_grams):
+                logging.warning(
+                    f"Discrepancia de peso detectada para SKU {product_data['sku']}: "
+                    f"esperado {int(weight_in_grams)}g, "
+                    f"obtenido {updated_product.variants[0].grams}g"
+                )
             
             return True
         else:
@@ -209,12 +253,36 @@ def update_simple_product(
 ) -> bool:
     """
     Actualiza un producto simple existente en Shopify
+
+    Args:
+        product_data: Diccionario con los datos del producto
+        shopify_id: ID del producto en Shopify
+        product_mapper: Instancia de ProductMapper para el mapeo de productos
+        location_id: ID de la ubicación en Shopify
+        is_update: Indica si es una actualización de producto existente
+
+    Returns:
+        bool: True si la actualización fue exitosa, False en caso contrario
     """
     try:
         existing_product = shopify.Product.find(shopify_id)
         if not existing_product:
-            logging.error(f"No se encontró el producto con ID {shopify_id}")
+            logging.error(f"❌ No se encontró el producto con ID {shopify_id}")
             return False
+
+        # Procesar peso correctamente
+        try:
+            weight_in_grams = float(str(product_data.get('weight', 0)).replace(',', '.'))
+            if weight_in_grams < 0:
+                print(f"⚠️ Peso negativo detectado para SKU {product_data['sku']}, ajustando a 0")
+                weight_in_grams = 0
+        except (ValueError, TypeError):
+            weight_in_grams = 0
+            print(f"⚠️ Error convirtiendo peso para SKU {product_data['sku']}")
+
+        print(f"\nProcesando peso para SKU {product_data['sku']}:")
+        print(f"- Peso original: {product_data.get('weight', 0)}")
+        print(f"- Peso exacto (g): {weight_in_grams:.3f}")
 
         existing_product.title = product_data['title']
         existing_product.body_html = product_data['body_html']
@@ -228,10 +296,19 @@ def update_simple_product(
             variant.sku = product_data['sku']
             variant.inventory_management = 'shopify'
             variant.inventory_policy = 'deny'
-            variant.grams = int(float(product_data.get('weight', 0)))
+            variant.weight = weight_in_grams
+            variant.weight_unit = 'g'
             variant.cost = product_data.get('cost', 0)
         
         if existing_product.save():
+            # Verificar peso guardado
+            updated_product = shopify.Product.find(shopify_id)
+            print(f"\nValores del producto después de actualizar:")
+            print(f"- ID: {updated_product.id}")
+            print(f"- SKU: {updated_product.variants[0].sku}")
+            print(f"- Peso exacto (g): {updated_product.variants[0].weight:.3f}")
+            print(f"- Unidad de peso: {updated_product.variants[0].weight_unit}")
+
             # Guardar mapeo del producto
             success = product_mapper.save_product_mapping(
                 internal_reference=product_data['sku'],
@@ -240,7 +317,7 @@ def update_simple_product(
             )
             
             if not success:
-                raise Exception("Error guardando mapeo del producto")
+                raise Exception("❌ Error guardando mapeo del producto")
             
             # Configurar inventario
             shopify.InventoryLevel.set(
@@ -251,7 +328,7 @@ def update_simple_product(
             
             # Actualizar metafields
             if product_data.get('metafields'):
-                create_product_metafields(existing_product.id, product_data['metafields'])
+                create_product_metafields_bulk(existing_product.id, product_data['metafields'])
             
             # Actualizar imágenes
             if product_data.get('images'):
@@ -259,13 +336,14 @@ def update_simple_product(
                     image.destroy()
                 setup_product_images(existing_product.id, product_data['images'])
             
+            print(f"✅ Producto {product_data['sku']} actualizado con éxito.")
             return True
         else:
-            logging.error(f"Error al actualizar producto simple: {existing_product.errors.full_messages()}")
+            logging.error(f"❌ Error al actualizar producto simple: {existing_product.errors.full_messages()}")
             return False
             
     except Exception as e:
-        logging.error(f"Error actualizando producto simple: {str(e)}")
+        logging.error(f"❌ Error actualizando producto simple: {str(e)}")
         return False
 
 def create_variant_product(
@@ -339,10 +417,12 @@ def create_variant_product(
         new_product.reload()  # Recargar para asegurarnos de tener toda la info actualizada
         
         for variant, var_data in zip(new_product.variants, variants_data):
-            print(f"\nProcesando variante: {var_data['sku']}")
-            print(f"- ID Variante: {variant.id}")
-            print(f"- Talla: {var_data['size']}")
-            print(f"- Stock: {var_data['stock']}")
+            print(f"\nVariante {variant.sku}:")
+            print(f"- ID: {variant.id}")
+            print(f"- Peso en gramos: {variant.grams}")
+            print(f"- Peso (weight): {variant.weight}")
+            print(f"- Unidad de peso: {variant.weight_unit}")
+            print(f"- Atributos completos: {variant.attributes}")
             
             # Guardar mapeo de variante
             if not product_mapper.save_variant_mapping(
@@ -366,8 +446,8 @@ def create_variant_product(
         # Crear metafields después de que todo lo demás esté listo
         if product_data.get('metafields'):
             print("\nCreando metafields...")
-            create_product_metafields(shopify_product_id, product_data['metafields'])
-        
+            #create_product_metafields(shopify_product_id, product_data['metafields'])
+            create_product_metafields_bulk(shopify_product_id, product_data['metafields'])
         # Configurar imágenes al final
         if product_data.get('images'):
             print(f"\nConfigurando {len(product_data['images'])} imágenes...")
@@ -390,6 +470,16 @@ def update_variant_product(
 ) -> bool:
     """
     Actualiza un producto con variantes existente en Shopify
+
+    Args:
+        product_data: Diccionario con los datos base del producto
+        variants_data: Lista de diccionarios con datos de cada variante
+        shopify_id: ID del producto en Shopify
+        product_mapper: Instancia de ProductMapper para el mapeo de productos
+        location_id: ID de la ubicación en Shopify
+
+    Returns:
+        bool: True si la actualización fue exitosa, False en caso contrario
     """
     try:
         print(f"Obteniendo producto de Shopify con ID: {shopify_id}")
@@ -399,24 +489,20 @@ def update_variant_product(
             return False
 
         print("Actualizando datos básicos del producto...")
-        # Actualizar datos básicos del producto
         existing_product.title = product_data['title']
         existing_product.body_html = product_data['body_html']
         existing_product.vendor = product_data['vendor']
         existing_product.product_type = product_data['product_type']
         existing_product.tags = product_data['tags']
         
-        # Configurar opción de talla
         print("Actualizando opciones de talla...")
         tallas = [v['size'] for v in variants_data]
         existing_product.options = [{'name': 'Talla', 'values': sorted(list(set(tallas)))}]
         
-        print("Guardando cambios en producto base...")
         if not existing_product.save():
             print(f"Error al actualizar producto base: {existing_product.errors.full_messages()}")
             return False
 
-        # Guardar mapeo del producto
         print("Actualizando mapeo del producto...")
         success = product_mapper.save_product_mapping(
             internal_reference=product_data['sku'],
@@ -427,18 +513,29 @@ def update_variant_product(
         if not success:
             raise Exception("Error guardando mapeo del producto")
 
-        # Recargar producto para tener la información más actualizada
         existing_product.reload()
         
-        # Crear diccionario de variantes existentes por SKU
         print("Procesando variantes...")
         existing_variants = {v.sku: v for v in existing_product.variants}
         new_variants = []
         
-        # Procesar cada variante
         for var_data in variants_data:
             variant = None
             is_new_variant = var_data['sku'] not in existing_variants
+            
+            # Procesar peso correctamente
+            try:
+                weight_in_grams = float(str(var_data.get('weight', 0)).replace(',', '.'))
+                if weight_in_grams < 0:
+                    print(f"⚠️ Peso negativo detectado para variante {var_data['sku']}, ajustando a 0")
+                    weight_in_grams = 0
+            except (ValueError, TypeError):
+                weight_in_grams = 0
+                print(f"⚠️ Error convirtiendo peso para variante {var_data['sku']}")
+
+            print(f"\nProcesando peso para variante {var_data['sku']}:")
+            print(f"- Peso original: {var_data.get('weight', 0)}")
+            print(f"- Peso exacto (g): {weight_in_grams:.3f}")
             
             if is_new_variant:
                 print(f"Creando nueva variante: {var_data['sku']}")
@@ -449,7 +546,8 @@ def update_variant_product(
                     'sku': var_data['sku'],
                     'inventory_management': 'shopify',
                     'inventory_policy': 'deny',
-                    'grams': int(float(var_data.get('weight', 0))),
+                    'weight': weight_in_grams,
+                    'weight_unit': 'g',
                     'cost': var_data.get('cost', 0)
                 })
             else:
@@ -457,13 +555,20 @@ def update_variant_product(
                 variant = existing_variants[var_data['sku']]
                 variant.option1 = var_data['size']
                 variant.price = var_data['price']
-                variant.grams = int(float(var_data.get('weight', 0)))
+                variant.weight = weight_in_grams
+                variant.weight_unit = 'g'
                 variant.cost = var_data.get('cost', 0)
             
-            # Guardar/actualizar variante
             if not variant.save():
                 print(f"Error guardando variante: {variant.errors.full_messages()}")
                 continue
+
+            # Verificar peso guardado
+            updated_variant = shopify.Variant.find(variant.id)
+            print(f"\nValores de la variante {var_data['sku']} después de guardar:")
+            print(f"- ID: {updated_variant.id}")
+            print(f"- Peso exacto (g): {updated_variant.weight:.3f}")
+            print(f"- Unidad de peso: {updated_variant.weight_unit}")
                 
             # Guardar mapeo de variante
             success = product_mapper.save_variant_mapping(
@@ -493,15 +598,13 @@ def update_variant_product(
         # Actualizar metafields
         if product_data.get('metafields'):
             print("Actualizando metafields...")
-            create_product_metafields(shopify_id, product_data['metafields'])
+            create_product_metafields_bulk(shopify_id, product_data['metafields'])
         
         # Actualizar imágenes
         if product_data.get('images'):
             print(f"Actualizando {len(product_data['images'])} imágenes...")
-            # Eliminar imágenes existentes
             for image in existing_product.images:
                 image.destroy()
-            # Añadir nuevas imágenes
             setup_product_images(shopify_id, product_data['images'])
         
         print(f"Producto {product_data['sku']} actualizado exitosamente")
@@ -511,10 +614,144 @@ def update_variant_product(
         print(f"Error actualizando producto con variantes: {str(e)}")
         logging.error(f"Error actualizando producto con variantes: {str(e)}")
         return False
+            
+    except Exception as e:
+        print(f"Error actualizando producto con variantes: {str(e)}")
+        logging.error(f"Error actualizando producto con variantes: {str(e)}")
+        return False
 
 ###########################################
 # FUNCIONES DE METAFIELDS E IMÁGENES
 ###########################################
+
+def create_product_metafields_bulk(product_id: int, metafields_data: Dict[str, str]) -> None:
+   """
+   Crea múltiples metafields para un producto usando GraphQL
+   
+   Args:
+       product_id: ID del producto en Shopify
+       metafields_data: Diccionario con los metafields a crear
+   """
+   # Mapeo de campos
+   field_mapping = {
+        'alto': {'key': 'alto', 'type': 'number_decimal'},
+        'ancho': {'key': 'ancho', 'type': 'number_decimal'},
+        'grosor': {'key': 'grosor', 'type': 'number_decimal'},
+        'medidas': {'key': 'medidas', 'type': 'single_line_text_field'},
+        'largo': {'key': 'largo', 'type': 'number_decimal'},
+        'peso': {'key': 'peso', 'type': 'number_decimal'},
+        'diametro': {'key': 'diametro', 'type': 'number_decimal'},
+        'piedra': {'key': 'piedra', 'type': 'single_line_text_field'},
+        'tipo_piedra': {'key': 'tipo_piedra', 'type': 'single_line_text_field'},
+        'forma_piedra': {'key': 'forma_piedra', 'type': 'single_line_text_field'},
+        'calidad_piedra': {'key': 'calidad_piedra', 'type': 'single_line_text_field'},
+        'color_piedra': {'key': 'color_piedra', 'type': 'single_line_text_field'},
+        'disposicion_piedras': {'key': 'disposicion_de_la_piedra', 'type': 'single_line_text_field'},
+        'acabado': {'key': 'acabado', 'type': 'single_line_text_field'},
+        'estructura': {'key': 'estructura', 'type': 'single_line_text_field'},
+        'material': {'key': 'material', 'type': 'single_line_text_field'},
+        'destinatario': {'key': 'destinatario', 'type': 'single_line_text_field'},
+        'cierre': {'key': 'cierre', 'type': 'single_line_text_field'},
+        'color_oro': {'key': 'color_oro', 'type': 'single_line_text_field'},
+        'calidad_diamante': {'key': 'calidad_diamante', 'type': 'single_line_text_field'},
+        'kilates_diamante': {'key': 'kilates_diamante', 'type': 'number_decimal'},
+        'color_diamante': {'key': 'color_diamante', 'type': 'single_line_text_field'},
+        'forma_pendientes': {'key': 'forma_pendientes', 'type': 'single_line_text_field'},
+        'forma_colgante': {'key': 'forma_colgante', 'type': 'single_line_text_field'},
+        'letra': {'key': 'letra', 'type': 'single_line_text_field'},
+        'figura_medalla': {'key': 'figura_medalla', 'type': 'single_line_text_field'},
+        'tipo_medalla': {'key': 'tipo_medalla', 'type': 'single_line_text_field'},
+        'tipo_pendientes': {'key': 'tipo_pendientes', 'type': 'single_line_text_field'},
+        'tipo_cadena': {'key': 'tipo_cadena', 'type': 'single_line_text_field'},
+        'cadena': {'key': 'cadena', 'type': 'single_line_text_field'}
+   }
+
+   if not metafields_data:
+       return
+
+   shop_url = SHOPIFY_SHOP_URL.replace('https://', '').replace('http://', '')
+   url = f"https://{shop_url}/admin/api/{SHOPIFY_API_VERSION}/graphql.json"
+   headers = {
+       'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
+       'Content-Type': 'application/json',
+   }
+
+   # Construir inputs para la mutación
+   metafield_inputs = []
+   for internal_key, value in metafields_data.items():
+       if value and str(value).strip():
+           field_config = field_mapping.get(internal_key)
+           if not field_config:
+               logging.warning(f"Campo no mapeado: {internal_key}")
+               continue
+
+           formatted_value = value
+           if field_config['type'] == 'number_decimal':
+               try:
+                   formatted_value = str(float(str(value).replace(',', '.')))
+               except ValueError:
+                   logging.error(f"Error convirtiendo valor a decimal: {value} para campo {internal_key}")
+                   continue
+
+           metafield_inputs.append({
+               "namespace": "custom",
+               "key": field_config['key'],
+               "value": formatted_value,
+               "type": field_config['type']
+           })
+
+   if not metafield_inputs:
+       return
+
+   # Construir la mutación GraphQL
+   mutation = """
+   mutation CreateMetafields($input: [MetafieldsSetInput!]!) {
+     metafieldsSet(metafields: $input) {
+       metafields {
+         key
+         value
+       }
+       userErrors {
+         field
+         message
+       }
+     }
+   }
+   """
+
+   variables = {
+       "input": [{
+           "ownerId": f"gid://shopify/Product/{product_id}",
+           **metafield
+       } for metafield in metafield_inputs]
+   }
+
+   try:
+       response = requests.post(
+           url,
+           headers=headers,
+           json={
+               'query': mutation,
+               'variables': variables
+           }
+       )
+       
+       response.raise_for_status()
+       result = response.json()
+
+       if 'errors' in result:
+           logging.error(f"Errores creando metafields en bulk: {result['errors']}")
+       elif 'data' in result and result['data']['metafieldsSet']['userErrors']:
+           logging.error(f"Errores de usuario: {result['data']['metafieldsSet']['userErrors']}")
+       else:
+           created_fields = len(metafield_inputs)
+           logging.info(f"Creados {created_fields} metafields exitosamente para producto {product_id}")
+           # Log detallado de los campos creados
+           for metafield in metafield_inputs:
+               logging.info(f"Metafield creado: {metafield['key']} = {metafield['value']}")
+
+   except Exception as e:
+       logging.error(f"Error creando metafields en bulk: {str(e)}")
 
 def create_product_metafields(product_id: int, metafields_data: Dict[str, str]) -> None:
     """
@@ -531,6 +768,7 @@ def create_product_metafields(product_id: int, metafields_data: Dict[str, str]) 
         'grosor': {'key': 'grosor', 'type': 'number_decimal'},
         'medidas': {'key': 'medidas', 'type': 'single_line_text_field'},
         'largo': {'key': 'largo', 'type': 'number_decimal'},
+        'peso': {'key': 'peso', 'type': 'number_decimal'},
         'diametro': {'key': 'diametro', 'type': 'number_decimal'},
         'piedra': {'key': 'piedra', 'type': 'single_line_text_field'},
         'tipo_piedra': {'key': 'tipo_piedra', 'type': 'single_line_text_field'},
@@ -546,7 +784,16 @@ def create_product_metafields(product_id: int, metafields_data: Dict[str, str]) 
         'color_oro': {'key': 'color_oro', 'type': 'single_line_text_field'},
         'calidad_diamante': {'key': 'calidad_diamante', 'type': 'single_line_text_field'},
         'kilates_diamante': {'key': 'kilates_diamante', 'type': 'number_decimal'},
-        'color_diamante': {'key': 'color_diamante', 'type': 'single_line_text_field'}
+        'color_diamante': {'key': 'color_diamante', 'type': 'single_line_text_field'},
+        'forma_pendientes': {'key': 'forma_pendientes', 'type': 'single_line_text_field'},
+        'forma_colgante': {'key': 'forma_colgante', 'type': 'single_line_text_field'},
+        'letra': {'key': 'letra', 'type': 'single_line_text_field'},
+        'figura_medalla': {'key': 'figura_medalla', 'type': 'single_line_text_field'},
+        'tipo_medalla': {'key': 'tipo_medalla', 'type': 'single_line_text_field'},
+        'tipo_pendientes': {'key': 'tipo_pendientes', 'type': 'single_line_text_field'},
+        'tipo_cadena': {'key': 'tipo_cadena', 'type': 'single_line_text_field'},
+        'cadena': {'key': 'cadena', 'type': 'single_line_text_field'}
+
     }
 
     for internal_key, value in metafields_data.items():
@@ -647,11 +894,32 @@ def process_products(df: pd.DataFrame, display_mode: bool = False) -> None:
                 print(f"  - Tipo: {product_data['product_type']}")
                 print(f"  - Precio: {product_data['price']} EUR")
                 print(f"  - Stock: {product_data['stock']}")
-                print(f"  - Metafields: {product_data['metafields']}")
-                print(f"  - Imágenes: {[img['src'] for img in product_data['images']]}")
+                print(f"  - Peso: {product_data['weight']} g")
+                print(f"  - Tags: {product_data['tags']}")
 
-                if not display_mode:
-                    # Verificar si el producto existe
+                if display_mode:
+                    # En modo display, mostrar metafields de manera más legible
+                    print("\nMetafields:")
+                    for key, value in product_data['metafields'].items():
+                        if value:  # Solo mostrar metafields que tienen valor
+                            print(f"  - {key}: {value}")
+                    
+                    print("\nImágenes:")
+                    for img in product_data['images']:
+                        print(f"  - {img['src']}")
+
+                    if product_info['is_variant_product']:
+                        print("\nVariantes:")
+                        variants_data = prepare_variants_data(product_info['variants'])
+                        for variant in variants_data:
+                            print(f"  - SKU: {variant['sku']}")
+                            print(f"    Talla: {variant['size']}")
+                            print(f"    Precio: {variant['price']} EUR")
+                            print(f"    Stock: {variant['stock']}")
+                            print(f"    Peso: {variant['weight']} g")
+
+                else:
+                    # Aquí va el código existente para modo no-display
                     existing_mapping = product_mapper.get_product_mapping(base_reference)
                     print("\n" + "="*50)
 
@@ -753,44 +1021,52 @@ def prepare_product_data(base_row: pd.Series, base_reference: str) -> Dict:
     """
     Prepara los datos comunes del producto
     """
-    # Extraer descripción y tipo
     description = clean_value(base_row['DESCRIPCION'])
     product_type = clean_value(base_row.get('TIPO', '')).lower()
     
-    # Inicializar diccionario de metafields vacío
-    metafields = {}
-
-    # Extraer medidas
+    # Extraer medidas y formas
     measures = extract_measures(description, product_type)
-    if measures:
-        metafields.update(measures)
+    shapes = extract_shapes_and_letters(description, product_type, description)
+    stones_from_desc = extract_stones(description)
 
-    # Extraer información de diamantes
-    diamond_info = extract_diamond_info(description)
-    if diamond_info:
-        metafields.update(diamond_info)
+    # Preparar los metafields
+    metafields = {}
+    
+    # Extraer información de medallas y colgantes
+    metafields.update(extract_medal_figure(description, product_type))
+    metafields.update(extract_medal_type(description, product_type))
+    metafields.update(extract_pendant_type(description, product_type))
+    metafields.update(extract_chain_type(description, product_type))
 
-    # Extraer información de piedras
-    stones_info = extract_stones(description)
-    if stones_info:
-        metafields.update(stones_info)
-
-    # Añadir campos básicos solo si tienen valor
-    destinatario = clean_value(base_row.get('GENERO', '')).capitalize()
-    if destinatario:
-        metafields['destinatario'] = destinatario
-
-    cierre = clean_value(base_row.get('CIERRE', '')).capitalize()
-    if cierre:
-        metafields['cierre'] = cierre
-
-    material = get_material(base_row['DESCRIPCION'])
-    if material:
+    # Campos básicos
+    if destinatario := clean_value(base_row.get('GENERO', '')):
+        metafields['destinatario'] = destinatario.capitalize()
+        
+    if cierre := clean_value(base_row.get('CIERRE', '')):
+        metafields['cierre'] = cierre.capitalize()
+        
+    if material := get_material(base_row['DESCRIPCION']):
         metafields['material'] = material
+        
+    if color_oro := clean_value(base_row.get('COLOR ORO', '')):
+        metafields['color_oro'] = color_oro.capitalize()
+    
+    # Campos de piedras - priorizar columnas del CSV
+    if piedra := clean_value(base_row.get('PIEDRA', '')):
+        metafields['piedra'] = piedra.capitalize()
+    elif stones_from_desc:  # Si no hay piedra en el CSV, usar la encontrada en descripción
+        metafields.update(stones_from_desc)
+        
+    if calidad_piedra := clean_value(base_row.get('CALIDAD PIEDRA', '')):
+        metafields['calidad_piedra'] = calidad_piedra.capitalize()
+    
+    # Peso
+    if peso := clean_value(base_row.get('PESO G.', '')):
+        metafields['peso'] = peso
 
-    color_oro = clean_value(base_row.get('COLOR ORO', '')).capitalize()
-    if color_oro:
-        metafields['color_oro'] = color_oro
+    # Añadir las medidas y formas extraídas
+    metafields.update(measures)
+    metafields.update(shapes)
 
     return {
         'title': format_title(base_reference, base_row['DESCRIPCION']),

@@ -10,6 +10,14 @@ import shopify
 class ProductMapper(MySQLConnector):
     def save_product_mapping(self, internal_reference: str, shopify_product, is_update: bool = False) -> bool:
         try:
+            # Asegurar que internal_reference es string
+            internal_reference = str(internal_reference).strip()
+            
+            print(f"Guardando mapeo de producto - Referencia: {internal_reference}")
+            print(f"- Shopify ID: {shopify_product.id}")
+            print(f"- Handle: {shopify_product.handle}")
+            print(f"- Title: {shopify_product.title}")
+
             query = """
                 INSERT INTO product_mappings 
                 (internal_reference, shopify_product_id, shopify_handle, title) 
@@ -49,8 +57,12 @@ class ProductMapper(MySQLConnector):
             return False
 
     def save_variant_mapping(self, internal_sku: str, variant, parent_reference: str, shopify_product_id: int, 
-                           size: str = None, price: float = None, is_update: bool = False) -> bool:
+                        size: str = None, price: float = None, is_update: bool = False) -> bool:
         try:
+            # Asegurar que internal_sku y parent_reference son strings
+            internal_sku = str(internal_sku).strip()
+            parent_reference = str(parent_reference).strip()
+
             print(f"Guardando mapeo para variante {internal_sku}")
             print(f"- Variant ID: {variant.id}")
             print(f"- Product ID: {shopify_product_id}")
@@ -75,8 +87,8 @@ class ProductMapper(MySQLConnector):
                 int(variant.id),
                 shopify_product_id,
                 parent_reference,
-                size,
-                price
+                str(size) if size is not None else None,
+                float(price) if price is not None else None
             )
             
             print(f"Ejecutando query con params: {params}")
@@ -107,15 +119,11 @@ class ProductMapper(MySQLConnector):
     def get_product_mapping(self, internal_reference: str) -> Optional[Dict]:
         """
         Obtiene el mapeo completo de un producto y sus variantes
-        
-        Args:
-            internal_reference (str): Referencia interna del producto
-            
-        Returns:
-            Optional[Dict]: Diccionario con la información del producto y sus variantes,
-                          o None si no se encuentra
         """
         try:
+            # Asegurar que internal_reference es string
+            internal_reference = str(internal_reference).strip()
+            
             # Obtener producto
             product_query = "SELECT * FROM product_mappings WHERE internal_reference = %s"
             products = self.execute_query(product_query, (internal_reference,), fetch=True)
