@@ -4,3 +4,4 @@ ShopifyAPI==12.3.0
 python-dotenv==1.0.0
 openpyxl==3.1.2
 xlrd==2.0.1
+tenacity>=8.0.0 

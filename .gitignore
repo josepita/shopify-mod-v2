@@ -1,5 +1,6 @@
 /data/
 /logs/
+/shopify_backups/
 /scripts/.env
 .env
 **/__pycache__/
