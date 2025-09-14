@@ -27,6 +27,12 @@ from utils.helpers import (
     get_variant_size, extract_measures, extract_diamond_info, extract_stones, extract_zodiac_info,
     extract_shapes_and_letters, extract_medal_figure, extract_medal_type, extract_pendant_type, extract_chain_type 
 )
+from utils.prepare import (
+    prepare_product_data,
+    prepare_variants_data,
+    prepare_images_data,
+    get_material,
+)
 
 
 def load_data(input_file: str) -> Optional[pd.DataFrame]:
@@ -1012,156 +1018,6 @@ def process_products(df: pd.DataFrame, display_mode: bool = False) -> None:
     finally:
         product_mapper.close()
 
-
-###########################################
-# FUNCIONES DE PREPARACIÓN DE DATOS
-###########################################
-
-def prepare_product_data(base_row: pd.Series, base_reference: str) -> Dict:
-    """
-    Prepara los datos comunes del producto
-    """
-    description = clean_value(base_row['DESCRIPCION'])
-    product_type = clean_value(base_row.get('TIPO', '')).lower()
-    
-    # Extraer medidas y formas
-    measures = extract_measures(description, product_type)
-    shapes = extract_shapes_and_letters(description, product_type, description)
-    stones_from_desc = extract_stones(description)
-
-    # Preparar los metafields
-    metafields = {}
-    
-    # Extraer información de medallas y colgantes
-    metafields.update(extract_medal_figure(description, product_type))
-    metafields.update(extract_medal_type(description, product_type))
-    metafields.update(extract_pendant_type(description, product_type))
-    metafields.update(extract_chain_type(description, product_type))
-
-    # Campos básicos
-    if destinatario := clean_value(base_row.get('GENERO', '')):
-        metafields['destinatario'] = destinatario.capitalize()
-        
-    if cierre := clean_value(base_row.get('CIERRE', '')):
-        metafields['cierre'] = cierre.capitalize()
-        
-    if material := get_material(base_row['DESCRIPCION']):
-        metafields['material'] = material
-        
-    if color_oro := clean_value(base_row.get('COLOR ORO', '')):
-        metafields['color_oro'] = color_oro.capitalize()
-    
-    # Campos de piedras - priorizar columnas del CSV
-    if piedra := clean_value(base_row.get('PIEDRA', '')):
-        metafields['piedra'] = piedra.capitalize()
-    elif stones_from_desc:  # Si no hay piedra en el CSV, usar la encontrada en descripción
-        metafields.update(stones_from_desc)
-        
-    if calidad_piedra := clean_value(base_row.get('CALIDAD PIEDRA', '')):
-        metafields['calidad_piedra'] = calidad_piedra.capitalize()
-    
-    # Peso
-    if peso := clean_value(base_row.get('PESO G.', '')):
-        metafields['peso'] = peso
-
-    # Añadir las medidas y formas extraídas
-    metafields.update(measures)
-    metafields.update(shapes)
-
-    return {
-        'title': format_title(base_reference, base_row['DESCRIPCION']),
-        'body_html': description,
-        'vendor': "Joyas Armaan",
-        'product_type': clean_value(base_row['TIPO']).capitalize(),
-        'tags': process_tags(
-            base_row.get('CATEGORIA', ''),
-            base_row.get('SUBCATEGORIA', ''),
-            base_row.get('TIPO', '')
-        ),
-        'sku': base_reference,
-        'price': round(float(base_row['PRECIO']) * 2.2, 2),
-        'stock': int(base_row['STOCK']),
-        'weight': clean_value(base_row.get('PESO G.', 0)),
-        'cost': clean_value(base_row['PRECIO']),
-        'metafields': metafields,
-        'images': prepare_images_data(base_row)
-    }
-
-def prepare_variants_data(variants_rows: List[pd.Series]) -> List[Dict]:
-    """
-    Prepara los datos de las variantes
-    
-    Args:
-        variants_rows: Lista de filas del DataFrame con datos de variantes
-        
-    Returns:
-        List[Dict]: Lista de datos de variantes preparados
-    """
-    variants_data = []
-    for row in variants_rows:
-        variant_reference = clean_value(row['REFERENCIA'])
-        size = get_variant_size(variant_reference)
-        if size:
-            # Limpiar y convertir el peso
-            try:
-                weight = float(clean_value(row.get('PESO G.', 0)).replace(',', '.'))
-            except (ValueError, TypeError):
-                weight = 0
-                print(f"⚠️ Error en peso para variante {variant_reference}")
-
-            variants_data.append({
-                'size': size,
-                'price': round(float(row['PRECIO']) * 2.2, 2),
-                'sku': variant_reference,
-                'stock': int(row['STOCK']),
-                'weight': weight,  # Peso en gramos
-                'cost': clean_value(row['PRECIO'])
-            })
-            
-            print(f"Datos de variante preparados - SKU: {variant_reference}, Peso: {weight}g")
-            
-    return variants_data
-
-def prepare_images_data(row: pd.Series) -> List[Dict]:
-    """
-    Prepara los datos de las imágenes
-    
-    Args:
-        row: Fila del DataFrame con datos de imágenes
-        
-    Returns:
-        List[Dict]: Lista de datos de imágenes preparados
-    """
-    images = []
-    for idx, img_col in enumerate(['IMAGEN 1', 'IMAGEN 2', 'IMAGEN 3'], 1):
-        img_src = clean_value(row.get(img_col, ''))
-        if img_src:
-            if not img_src.startswith(('http://', 'https://')):
-                img_src = f"https://{img_src}"
-            images.append({
-                'src': img_src,
-                'position': idx,
-                'alt': f"{row.get('DESCRIPCION', '')} - Imagen {idx}"
-            })
-    return images
-
-def get_material(description: str) -> str:
-    """
-    Determina el material basado en la descripción
-    
-    Args:
-        description: Descripción del producto
-        
-    Returns:
-        str: Material determinado
-    """
-    if isinstance(description, str):
-        description = description.upper()
-        if description.startswith("18K"):
-            return "Oro 18 kilates"
-        elif description.startswith("9K"):
-            return "Oro 9 kilates"
-    return ""
 
 ###########################################
 # FUNCIÓN MAIN

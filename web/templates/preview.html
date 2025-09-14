@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Previsualización</h3>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% else %}
+    <p><strong>Archivo:</strong> {{ filename }} — mostrando hasta {{ n }} filas.</p>
+    {% if resumen and resumen|length > 0 %}
+      <table>
+        <thead>
+          <tr>
+            <th>Referencia</th>
+            <th>Descripción</th>
+            <th>Tipo</th>
+            <th>Precio</th>
+            <th>Variantes</th>
+            <th>Datos Shopify</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in resumen %}
+          <tr>
+            <td>{{ item.referencia }}</td>
+            <td>{{ item.descripcion }}</td>
+            <td>{{ item.tipo }}</td>
+            <td>{{ item.precio }}</td>
+            <td>{% if item.es_variantes %}{{ item.variantes }}{% else %}-{% endif %}</td>
+            <td>
+              <details>
+                <summary>Ver</summary>
+                {% if item.shopify and item.shopify.producto %}
+                  <div style="margin-top:8px;">
+                    <strong>Producto</strong>
+                    <ul>
+                      <li><strong>Título:</strong> {{ item.shopify.producto.title }}</li>
+                      <li><strong>SKU:</strong> {{ item.shopify.producto.sku }}</li>
+                      <li><strong>Tipo:</strong> {{ item.shopify.producto.product_type }}</li>
+                      <li><strong>Precio:</strong> {{ item.shopify.producto.price }}</li>
+                      <li><strong>Stock:</strong> {{ item.shopify.producto.stock }}</li>
+                      <li><strong>Peso (g):</strong> {{ item.shopify.producto.weight }}</li>
+                      <li><strong>Tags:</strong> {{ item.shopify.producto.tags }}</li>
+                    </ul>
+                    {% if item.shopify.producto.metafields %}
+                      <div>
+                        <strong>Metafields</strong>
+                        <ul>
+                          {% for k, v in item.shopify.producto.metafields.items() %}
+                            {% if v %}
+                              <li>{{ k }}: {{ v }}</li>
+                            {% endif %}
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.shopify.producto.images and item.shopify.producto.images|length > 0 %}
+                      <div>
+                        <strong>Imágenes</strong>
+                        <ul>
+                          {% for img in item.shopify.producto.images %}
+                            <li>{{ img.src }}</li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endif %}
+                {% if item.es_variantes and item.shopify and item.shopify.variantes %}
+                  <div style="margin-top:8px;">
+                    <strong>Variantes</strong>
+                    <ul>
+                      {% for v in item.shopify.variantes %}
+                        <li>
+                          SKU: {{ v.sku }} — Talla: {{ v.size }} — Precio: {{ v.price }} — Stock: {{ v.stock }} — Peso (g): {{ v.weight }}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </details>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No se encontraron registros a mostrar.</p>
+    {% endif %}
+  {% endif %}
+</div>
+
+<a class="btn" href="/">Volver</a>
+{% endblock %}
