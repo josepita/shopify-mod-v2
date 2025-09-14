@@ -752,6 +752,23 @@ def catalog_fetch(request: Request, url: str = Form(...), username: str = Form("
     return RedirectResponse(url="/catalog?msg=fetch_ok", status_code=303)
 
 
+@app.post("/catalog/snapshot")
+def catalog_snapshot_now():
+    # Crea snapshot desde el catalog-current.* si existe
+    for ext in (".csv", ".xlsx", ".xls"):
+        dest = Path(str(CATALOG_FILE) + ext)
+        if dest.exists():
+            try:
+                df = _load_dataframe_for_preview(dest)
+                if df is not None:
+                    _archive_and_snapshot_df(df, dest.name)
+                    _save_catalog_metadata(df, dest, source=f"snapshot:{dest.name}")
+                    return RedirectResponse(url="/catalog?msg=snap_ok", status_code=303)
+            except Exception:
+                pass
+    return RedirectResponse(url="/catalog?msg=snap_err", status_code=303)
+
+
 class _LogIO(io.TextIOBase):
     """Canal para redirigir stdout/stderr a los logs del job."""
 
@@ -1011,9 +1028,11 @@ def _run_detect_job(job: Job, detect_type: str = "all", limit: int | None = None
     job.status = "running"
     try:
         job.append_log("Detectando cambios entre snapshots y poblando colas...\n")
+        snap = qm.snapshot_stats()
+        job.append_log(f"Snapshot más reciente: {snap['latest']} — filas: {snap['rows']}\n")
         stats = qm.queue_changes_from_snapshots(process_type=detect_type, limit=limit or None)
-        job.append_log(f"Cola de precios: +{stats['inserted_prices']}\n")
-        job.append_log(f"Cola de stock: +{stats['inserted_stock']}\n")
+        job.append_log(f"Insertados precios: +{stats['inserted_prices']}\n")
+        job.append_log(f"Insertados stock: +{stats['inserted_stock']}\n")
         job.status = "done"
     except Exception as e:
         job.status = "error"
@@ -1022,6 +1041,10 @@ def _run_detect_job(job: Job, detect_type: str = "all", limit: int | None = None
 
 @app.post("/queues/detect")
 def queues_detect(request: Request, type: str = Form("all"), limit: int = Form(0)):
+    # Pre-chequeo: snapshot
+    snap = qm.snapshot_stats()
+    if not snap.get('latest'):
+        return RedirectResponse(url="/catalog?msg=no_snapshot", status_code=303)
     job = job_manager.create(filename=f"detect-{type}")
     thread = threading.Thread(target=_run_detect_job, args=(job, type, (limit or None)), daemon=True)
     thread.start()
@@ -1032,9 +1055,11 @@ def _run_force_job(job: Job, force_type: str = "all", limit: int | None = None):
     job.status = "running"
     try:
         job.append_log("Forzando llenado de colas desde snapshot actual...\n")
+        snap = qm.snapshot_stats()
+        job.append_log(f"Snapshot más reciente: {snap['latest']} — filas: {snap['rows']} (mapeadas: {snap['mapped']})\n")
         stats = qm.queue_force_from_snapshot(process_type=force_type, limit=limit or None)
-        job.append_log(f"Cola de precios: +{stats['inserted_prices']}\n")
-        job.append_log(f"Cola de stock: +{stats['inserted_stock']}\n")
+        job.append_log(f"Insertados precios: +{stats['inserted_prices']}\n")
+        job.append_log(f"Insertados stock: +{stats['inserted_stock']}\n")
         job.status = "done"
     except Exception as e:
         job.status = "error"
@@ -1043,6 +1068,9 @@ def _run_force_job(job: Job, force_type: str = "all", limit: int | None = None):
 
 @app.post("/queues/force")
 def queues_force(request: Request, type: str = Form("all"), limit: int = Form(0)):
+    snap = qm.snapshot_stats()
+    if not snap.get('latest'):
+        return RedirectResponse(url="/catalog?msg=no_snapshot", status_code=303)
     job = job_manager.create(filename=f"force-{type}")
     thread = threading.Thread(target=_run_force_job, args=(job, type, (limit or None)), daemon=True)
     thread.start()

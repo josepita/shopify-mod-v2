@@ -4,7 +4,7 @@ from __future__ import annotations
 Acceso a colas de actualización de precio/stock e históricos.
 Usa mysql-connector como el resto de la capa DB actual.
 """
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import mysql.connector  # type: ignore
 from config.settings import MYSQL_CONFIG
 
@@ -191,6 +191,7 @@ def queue_changes_from_snapshots(process_type: str = 'all', limit: int | None = 
         "inserted_prices": inserted_prices,
         "inserted_stock": inserted_stock,
         "skipped_unmapped": skipped_unmapped,
+        "latest": latest,
     }
 
 
@@ -263,4 +264,75 @@ def queue_force_from_snapshot(process_type: str = 'all', limit: int | None = Non
 
     cnx.commit()
     cur.close(); cnx.close()
-    return {"inserted_prices": inserted_prices, "inserted_stock": inserted_stock}
+    return {"inserted_prices": inserted_prices, "inserted_stock": inserted_stock, "latest": latest}
+
+
+# ---- Stats helpers ----
+
+def _latest_snapshot(cur) -> Optional[str]:
+    cur.execute("SELECT MAX(snapshot_date) FROM catalog_snapshots")
+    row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def snapshot_stats() -> Dict[str, int | str | None]:
+    cnx = _get_connection()
+    cur = cnx.cursor()
+    latest = _latest_snapshot(cur)
+    if not latest:
+        cur.close(); cnx.close()
+        return {"latest": None, "rows": 0, "mapped": 0, "price_candidates": 0, "stock_candidates": 0, "price_pending": 0, "stock_pending": 0}
+    # rows
+    cur.execute("SELECT COUNT(*) FROM catalog_snapshots WHERE snapshot_date=%s", (latest,))
+    rows = int(cur.fetchone()[0])
+    # mapped (UPPER TRIM)
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM catalog_snapshots s
+        JOIN variant_mappings vm
+          ON UPPER(TRIM(vm.internal_sku)) = UPPER(TRIM(s.reference))
+        WHERE s.snapshot_date = %s
+        """,
+        (latest,),
+    )
+    mapped = int(cur.fetchone()[0])
+    # price candidates
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM catalog_snapshots s
+        JOIN variant_mappings vm
+          ON UPPER(TRIM(vm.internal_sku)) = UPPER(TRIM(s.reference))
+        WHERE s.snapshot_date = %s AND s.precio IS NOT NULL
+        """,
+        (latest,),
+    )
+    price_candidates = int(cur.fetchone()[0])
+    # stock candidates
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM catalog_snapshots s
+        JOIN variant_mappings vm
+          ON UPPER(TRIM(vm.internal_sku)) = UPPER(TRIM(s.reference))
+        WHERE s.snapshot_date = %s AND s.stock IS NOT NULL
+        """,
+        (latest,),
+    )
+    stock_candidates = int(cur.fetchone()[0])
+    # pendings
+    cur.execute("SELECT COUNT(*) FROM price_updates_queue WHERE status='pending'")
+    price_pending = int(cur.fetchone()[0])
+    cur.execute("SELECT COUNT(*) FROM stock_updates_queue WHERE status='pending'")
+    stock_pending = int(cur.fetchone()[0])
+    cur.close(); cnx.close()
+    return {
+        "latest": latest,
+        "rows": rows,
+        "mapped": mapped,
+        "price_candidates": price_candidates,
+        "stock_candidates": stock_candidates,
+        "price_pending": price_pending,
+        "stock_pending": stock_pending,
+    }

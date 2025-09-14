@@ -6,6 +6,12 @@
     <div class="alert alert-success mt-2">Catálogo descargado y almacenado correctamente.</div>
   {% elif msg == 'upload_ok' %}
     <div class="alert alert-success mt-2">Catálogo cargado y almacenado correctamente.</div>
+  {% elif msg == 'snap_ok' %}
+    <div class="alert alert-success mt-2">Snapshot creado desde el catálogo actual.</div>
+  {% elif msg == 'snap_err' %}
+    <div class="alert alert-danger mt-2">No se pudo crear snapshot (no hay catálogo actual o error al leerlo).</div>
+  {% elif msg == 'no_snapshot' %}
+    <div class="alert alert-warning mt-2">Aún no hay snapshot creado. Descarga o crea un snapshot desde esta página.</div>
   {% endif %}
   {% if not has_data %}
     <p class="text-muted">Sube un CSV/XLS(X) para analizar qué productos están subidos a Shopify.</p>
@@ -43,12 +49,19 @@
   </div>
 
   {% if last_catalog %}
+  {% set src = last_catalog.source or '' %}
+  {% if src and src.startswith('fetch:') %}
+    {% set origen = 'Descargado' %}
+  {% elif src and src.startswith('upload:') %}
+    {% set origen = 'Subido' %}
+  {% else %}
+    {% set origen = 'Desconocido' %}
+  {% endif %}
   <div class="mt-3 text-muted">
-    <strong>Último catálogo:</strong>
-    <span class="ms-2">Archivo: {{ last_catalog.path }}</span>
-    <span class="ms-2">Filas: {{ last_catalog.rows }}</span>
-    <span class="ms-2">Tamaño: {{ last_catalog.size_human }}</span>
-    <span class="ms-2">Guardado: {{ last_catalog.saved_at }}</span>
+    <strong>Último catálogo en uso:</strong>
+    <span class="ms-2">Origen: {{ origen }}</span>
+    <span class="ms-2">Fecha y hora: {{ last_catalog.saved_at }}</span>
+    <span class="ms-2">Líneas: {{ last_catalog.rows }}</span>
   </div>
   {% endif %}
 </div>
