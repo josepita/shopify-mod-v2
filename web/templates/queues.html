@@ -46,6 +46,25 @@
 </div>
 
 <div class="card p-3 mb-3">
+  <h4 class="h6">Forzar llenado de colas (snapshot actual)</h4>
+  <form action="/queues/force" method="post" class="d-flex gap-2 align-items-end">
+    <div>
+      <label for="ftype">Tipo</label>
+      <select class="form-select" id="ftype" name="type">
+        <option value="all">Todos</option>
+        <option value="prices">Solo precios</option>
+        <option value="stock">Solo stock</option>
+      </select>
+    </div>
+    <div>
+      <label for="flimit">Límite (opcional)</label>
+      <input class="form-control" type="number" id="flimit" name="limit" value="0" min="0" max="100000">
+    </div>
+    <button class="btn btn-outline-warning" type="submit">Forzar colas</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-3">
   <h4 class="h6">Pendientes de precio ({{ pending_prices|length }})</h4>
   <table class="table table-sm table-striped align-middle">
     <thead>

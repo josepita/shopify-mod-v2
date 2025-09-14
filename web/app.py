@@ -27,6 +27,9 @@ from db import queue_manager as qm
 from services.shopify_graphql import ShopifyGraphQL
 import logging
 from utils.validator import validate_catalog_df
+import requests
+from bs4 import BeautifulSoup
+import re
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,6 +37,8 @@ UPLOAD_DIR = BASE_DIR / "web" / "uploads"
 TEMPLATES_DIR = BASE_DIR / "web" / "templates"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CATALOG_FILE = UPLOAD_DIR / "catalog-current"
+ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
+ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +90,53 @@ def _load_dataframe_for_preview(path: Path) -> Optional[object]:
     except Exception:
         pass
 
+    return None
+
+
+def _fetch_remote_catalog(url: str, username: str = "", password: str = "") -> Optional[object]:
+    """Descarga un CSV directo o extrae la primera tabla HTML en un DataFrame."""
+    try:
+        import pandas as pd  # type: ignore
+        auth = (username, password) if username and password else None
+        resp = requests.get(url, auth=auth, timeout=60)
+        resp.raise_for_status()
+        content_type = resp.headers.get('Content-Type', '').lower()
+        # CSV directo
+        if 'text/csv' in content_type or url.lower().endswith('.csv'):
+            from io import StringIO
+            return pd.read_csv(StringIO(resp.text))
+        # HTML con tabla
+        if 'text/html' in content_type or '<table' in resp.text.lower():
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            table = soup.find('table')
+            if not table:
+                return None
+            # Extraer cabeceras de la primera fila
+            rows = table.find_all('tr')
+            headers = [td.get_text(strip=True) for td in rows[0].find_all(['td','th'])]
+            data = []
+            for tr in rows[1:]:
+                cells = tr.find_all('td')
+                if not cells:
+                    continue
+                row = {}
+                for i, td in enumerate(cells):
+                    if i < len(headers):
+                        text = td.get_text(strip=True)
+                        if headers[i] == 'PRECIO':
+                            text = re.sub(r'[^\d.,]', '', text).replace(',', '.')
+                        elif headers[i] == 'STOCK':
+                            text = re.sub(r'[^\d]', '', text) or '0'
+                        elif headers[i] == 'PESO G.':
+                            text = re.sub(r'[^\d.,]', '', text).replace(',', '.')
+                        row[headers[i]] = text
+                if row:
+                    data.append(row)
+            df = pd.DataFrame(data)
+            df.columns = df.columns.str.strip()
+            return df
+    except Exception:
+        return None
     return None
 
 
@@ -633,6 +685,25 @@ def preview(request: Request, file: UploadFile = File(...), n: int = Form(10)):
     )
 
 
+@app.post("/catalog/fetch", response_class=HTMLResponse)
+def catalog_fetch(request: Request, url: str = Form(...), username: str = Form(""), password: str = Form("")):
+    df = _fetch_remote_catalog(url, username=username, password=password)
+    if df is None:
+        return templates.TemplateResponse(
+            "catalog.html",
+            {"request": request, "has_data": False, "error": "No se pudo descargar o parsear el catálogo remoto."},
+            status_code=400,
+        )
+    # Guardar como catalog-current.csv y archivar/snapshot
+    dest = Path(str(CATALOG_FILE) + ".csv")
+    try:
+        df.to_csv(dest, index=False)
+        _archive_and_snapshot_df(df, os.path.basename(url))
+    except Exception:
+        pass
+    return RedirectResponse(url="/catalog", status_code=303)
+
+
 class _LogIO(io.TextIOBase):
     """Canal para redirigir stdout/stderr a los logs del job."""
 
@@ -903,5 +974,26 @@ def _run_detect_job(job: Job, detect_type: str = "all", limit: int | None = None
 def queues_detect(request: Request, type: str = Form("all"), limit: int = Form(0)):
     job = job_manager.create(filename=f"detect-{type}")
     thread = threading.Thread(target=_run_detect_job, args=(job, type, (limit or None)), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+def _run_force_job(job: Job, force_type: str = "all", limit: int | None = None):
+    job.status = "running"
+    try:
+        job.append_log("Forzando llenado de colas desde snapshot actual...\n")
+        stats = qm.queue_force_from_snapshot(process_type=force_type, limit=limit or None)
+        job.append_log(f"Cola de precios: +{stats['inserted_prices']}\n")
+        job.append_log(f"Cola de stock: +{stats['inserted_stock']}\n")
+        job.status = "done"
+    except Exception as e:
+        job.status = "error"
+        job.error_message = str(e)
+
+
+@app.post("/queues/force")
+def queues_force(request: Request, type: str = Form("all"), limit: int = Form(0)):
+    job = job_manager.create(filename=f"force-{type}")
+    thread = threading.Thread(target=_run_force_job, args=(job, type, (limit or None)), daemon=True)
     thread.start()
     return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)

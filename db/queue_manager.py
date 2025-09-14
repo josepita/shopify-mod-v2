@@ -192,3 +192,75 @@ def queue_changes_from_snapshots(process_type: str = 'all', limit: int | None = 
         "inserted_stock": inserted_stock,
         "skipped_unmapped": skipped_unmapped,
     }
+
+
+def queue_force_from_snapshot(process_type: str = 'all', limit: int | None = None) -> Dict[str, int]:
+    """
+    Fuerza el llenado de colas usando el snapshot más reciente (sin comparar).
+    Inserta todas las referencias mapeadas en variant_mappings.
+    """
+    cnx = _get_connection()
+    cur = cnx.cursor()
+    cur.execute("SELECT MAX(snapshot_date) FROM catalog_snapshots")
+    latest_row = cur.fetchone()
+    latest = latest_row[0] if latest_row else None
+    if not latest:
+        cur.close(); cnx.close()
+        return {"inserted_prices": 0, "inserted_stock": 0}
+
+    inserted_prices = 0
+    inserted_stock = 0
+
+    if process_type in ('all', 'prices'):
+        cur.execute(
+            """
+            SELECT vm.id, s.precio
+            FROM catalog_snapshots s
+            JOIN variant_mappings vm ON vm.internal_sku = s.reference
+            WHERE s.snapshot_date = %s AND s.precio IS NOT NULL
+            """,
+            (latest,),
+        )
+        rows = cur.fetchall()
+        if limit:
+            rows = rows[: int(limit)]
+        for vm_id, price in rows:
+            cur.execute(
+                "SELECT COUNT(*) FROM price_updates_queue WHERE variant_mapping_id=%s AND status='pending'",
+                (vm_id,),
+            )
+            if int(cur.fetchone()[0]) == 0:
+                cur.execute(
+                    "INSERT INTO price_updates_queue (variant_mapping_id, new_price, status) VALUES (%s,%s,'pending')",
+                    (vm_id, float(price)),
+                )
+                inserted_prices += 1
+
+    if process_type in ('all', 'stock'):
+        cur.execute(
+            """
+            SELECT vm.id, s.stock
+            FROM catalog_snapshots s
+            JOIN variant_mappings vm ON vm.internal_sku = s.reference
+            WHERE s.snapshot_date = %s AND s.stock IS NOT NULL
+            """,
+            (latest,),
+        )
+        rows = cur.fetchall()
+        if limit:
+            rows = rows[: int(limit)]
+        for vm_id, stock in rows:
+            cur.execute(
+                "SELECT COUNT(*) FROM stock_updates_queue WHERE variant_mapping_id=%s AND status='pending'",
+                (vm_id,),
+            )
+            if int(cur.fetchone()[0]) == 0:
+                cur.execute(
+                    "INSERT INTO stock_updates_queue (variant_mapping_id, new_stock, status) VALUES (%s,%s,'pending')",
+                    (vm_id, int(stock)),
+                )
+                inserted_stock += 1
+
+    cnx.commit()
+    cur.close(); cnx.close()
+    return {"inserted_prices": inserted_prices, "inserted_stock": inserted_stock}

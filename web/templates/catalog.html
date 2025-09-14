@@ -8,13 +8,34 @@
   {% if error %}
     <p class="text-danger">{{ error }}</p>
   {% endif %}
-  <form action="/catalog/upload" method="post" enctype="multipart/form-data" class="mt-2 d-flex gap-2 align-items-end">
-    <div>
-      <label for="file">Archivo de productos (XLS/XLSX/CSV)</label>
-      <input class="form-control" type="file" id="file" name="file" required>
+  <div class="row g-3 mt-1">
+    <div class="col-md-6">
+      <form action="/catalog/upload" method="post" enctype="multipart/form-data" class="d-flex gap-2 align-items-end">
+        <div class="flex-grow-1">
+          <label for="file">Archivo de productos (XLS/XLSX/CSV)</label>
+          <input class="form-control" type="file" id="file" name="file" required>
+        </div>
+        <button class="btn btn-primary" type="submit">Cargar</button>
+      </form>
     </div>
-    <button class="btn btn-primary" type="submit">Cargar</button>
-  </form>
+    <div class="col-md-6">
+      <form action="/catalog/fetch" method="post" class="d-flex gap-2 align-items-end">
+        <div class="flex-grow-1">
+          <label for="url">URL del catálogo</label>
+          <input class="form-control" type="url" id="url" name="url" placeholder="https://..." required>
+        </div>
+        <div>
+          <label for="username">Usuario</label>
+          <input class="form-control" type="text" id="username" name="username" placeholder="(opcional)">
+        </div>
+        <div>
+          <label for="password">Password</label>
+          <input class="form-control" type="password" id="password" name="password" placeholder="(opcional)">
+        </div>
+        <button class="btn btn-outline-primary" type="submit">Descargar</button>
+      </form>
+    </div>
+  </div>
 </div>
 
 {% if has_data %}
