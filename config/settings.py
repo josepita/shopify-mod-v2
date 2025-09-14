@@ -24,6 +24,14 @@ SHOPIFY_ACCESS_TOKEN = os.getenv('SHOPIFY_ACCESS_TOKEN')
 SHOPIFY_API_VERSION = os.getenv('SHOPIFY_API_VERSION', '2024-01')
 SHOPIFY_SHOP_URL = os.getenv('SHOPIFY_SHOP_URL')
 
+# Configuración de catálogo remoto (opcional)
+CSV_URL = os.getenv('CSV_URL', '')
+CSV_USERNAME = os.getenv('CSV_USERNAME', '')
+CSV_PASSWORD = os.getenv('CSV_PASSWORD', '')
+
+# Margen de precio por defecto (PVP = coste * PRICE_MARGIN)
+PRICE_MARGIN = float(os.getenv('PRICE_MARGIN', '2.2'))
+
 # Configuración de logging
 LOG_DIR = 'logs'
 if not os.path.exists(LOG_DIR):
@@ -46,12 +54,11 @@ logging.basicConfig(
 logging.getLogger('pyactiveresource.connection').setLevel(logging.WARNING)
 
 # Validar configuración crítica
+# Validación mínima de credenciales críticas
 if not SHOPIFY_ACCESS_TOKEN:
     raise ValueError("SHOPIFY_ACCESS_TOKEN no está configurado en .env")
-
 if not SHOPIFY_SHOP_URL:
     raise ValueError("SHOPIFY_SHOP_URL no está configurado en .env")
-
 if not MYSQL_CONFIG['password']:
     raise ValueError("MYSQL_PASSWORD no está configurado en .env")
 

@@ -22,15 +22,15 @@
       <form action="/catalog/fetch" method="post" class="d-flex gap-2 align-items-end">
         <div class="flex-grow-1">
           <label for="url">URL del catálogo</label>
-          <input class="form-control" type="url" id="url" name="url" placeholder="https://..." required>
+          <input class="form-control" type="url" id="url" name="url" placeholder="https://..." value="{{ csv_url or '' }}" required>
         </div>
         <div>
           <label for="username">Usuario</label>
-          <input class="form-control" type="text" id="username" name="username" placeholder="(opcional)">
+          <input class="form-control" type="text" id="username" name="username" placeholder="(opcional)" value="{{ csv_username or '' }}">
         </div>
         <div>
           <label for="password">Password</label>
-          <input class="form-control" type="password" id="password" name="password" placeholder="(opcional)">
+          <input class="form-control" type="password" id="password" name="password" placeholder="(opcional)" value="{{ csv_password or '' }}">
         </div>
         <button class="btn btn-outline-primary" type="submit">Descargar</button>
       </form>

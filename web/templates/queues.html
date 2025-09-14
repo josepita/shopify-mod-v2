@@ -22,6 +22,10 @@
       <label for="batch">Tamaño de lote</label>
       <input class="form-control" type="number" id="batch" name="batch" value="50" min="1" max="1000">
     </div>
+    <div>
+      <label for="margin">Margen PVP</label>
+      <input class="form-control" type="number" id="margin" name="margin" step="0.01" value="{{ default_margin or 2.2 }}" min="1" max="10">
+    </div>
     <button class="btn btn-primary" type="submit">Procesar</button>
   </form>
 </div>

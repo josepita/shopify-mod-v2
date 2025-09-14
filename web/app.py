@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from .job_manager import job_manager, Job
 from utils.helpers import group_variants, clean_value, get_base_reference
 from utils.prepare import prepare_product_data, prepare_variants_data
-from config.settings import MYSQL_CONFIG
+from config.settings import MYSQL_CONFIG, CSV_URL, CSV_USERNAME, CSV_PASSWORD, PRICE_MARGIN
 import mysql.connector  # type: ignore
 import datetime as _dt
 from pathlib import Path
@@ -388,7 +388,13 @@ def catalog(
     sort_dir: str = Query("asc"),  # asc|desc
 ):
     df = _load_catalog_df()
-    context = {"request": request, "has_data": df is not None}
+    context = {
+        "request": request,
+        "has_data": df is not None,
+        "csv_url": CSV_URL,
+        "csv_username": CSV_USERNAME,
+        "csv_password": CSV_PASSWORD,
+    }
     if df is None:
         return templates.TemplateResponse("catalog.html", context)
 
@@ -879,11 +885,12 @@ def queues_page(request: Request, limit: int = 50):
             "pending_prices": pending_prices,
             "pending_stock": pending_stock,
             "limit": limit,
+            "default_margin": PRICE_MARGIN,
         },
     )
 
 
-def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = 2.2):
+def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = PRICE_MARGIN):
     job.append_log("Iniciando procesamiento de cola de precios...\n")
     gql = ShopifyGraphQL()
     processed = 0
@@ -935,11 +942,11 @@ def _process_stock_queues(job: Job, batch_limit: int = 50):
     job.append_log(f"Procesados stock: {processed}\n")
 
 
-def _run_queue_job(job: Job, process_type: str = "all", batch_limit: int = 50):
+def _run_queue_job(job: Job, process_type: str = "all", batch_limit: int = 50, margin: float = PRICE_MARGIN):
     job.status = "running"
     try:
         if process_type in ("all", "prices"):
-            _process_price_queues(job, batch_limit=batch_limit)
+            _process_price_queues(job, batch_limit=batch_limit, margin=margin)
         if process_type in ("all", "stock"):
             _process_stock_queues(job, batch_limit=batch_limit)
         job.status = "done"
@@ -950,9 +957,10 @@ def _run_queue_job(job: Job, process_type: str = "all", batch_limit: int = 50):
 
 
 @app.post("/queues/process")
-def queues_process(request: Request, type: str = Form("all"), batch: int = Form(50)):
+def queues_process(request: Request, type: str = Form("all"), batch: int = Form(50), margin: float = Form(None)):
     job = job_manager.create(filename=f"queues-{type}")
-    thread = threading.Thread(target=_run_queue_job, args=(job, type, batch), daemon=True)
+    m = float(margin) if margin is not None else PRICE_MARGIN
+    thread = threading.Thread(target=_run_queue_job, args=(job, type, batch, m), daemon=True)
     thread.start()
     return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
 
