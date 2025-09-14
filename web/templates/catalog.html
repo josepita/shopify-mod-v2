@@ -32,6 +32,26 @@
 </div>
 
 <div class="card p-3 mb-3">
+  <h4 class="h6">Validación CSV</h4>
+  {% if validation and not validation.ok %}
+    <div class="alert alert-danger mb-2">
+      Faltan columnas requeridas: {{ validation.missing_columns | join(', ') }}
+    </div>
+  {% else %}
+    <div class="alert alert-success mb-2">Estructura de columnas OK</div>
+  {% endif %}
+  <div class="row row-cols-2 row-cols-md-4 g-2">
+    <div class="col"><div class="p-2 border rounded">Precio = 0: <strong>{{ validation.stats.zero_prices.count }}</strong> ({{ validation.stats.zero_prices.percent }}%)</div></div>
+    <div class="col"><div class="p-2 border rounded">Stock = 0: <strong>{{ validation.stats.zero_stock.count }}</strong> ({{ validation.stats.zero_stock.percent }}%)</div></div>
+  </div>
+  {% if validation.notes and validation.notes|length > 0 %}
+    <ul class="mt-2 text-warning">
+      {% for n in validation.notes %}<li>{{ n }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+</div>
+
+<div class="card p-3 mb-3">
   <h4 class="h6">Filtros</h4>
   <form action="/catalog" method="get" class="d-flex gap-3 flex-wrap align-items-end">
     <div>

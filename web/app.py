@@ -26,6 +26,7 @@ import csv
 from db import queue_manager as qm
 from services.shopify_graphql import ShopifyGraphQL
 import logging
+from utils.validator import validate_catalog_df
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -271,6 +272,7 @@ def catalog(
 
     try:
         records, metrics, categorias, subcategorias = _build_catalog_records(df, q, categoria, subcategoria, estado)
+        validation = validate_catalog_df(df)
     except Exception as e:
         context.update({"error": f"Error preparando catálogo: {e}"})
         return templates.TemplateResponse("catalog.html", context, status_code=500)
@@ -313,6 +315,7 @@ def catalog(
             "pages": pages,
             "sort_by": sort_by,
             "sort_dir": sort_dir,
+            "validation": validation,
         }
     )
     return templates.TemplateResponse("catalog.html", context)
