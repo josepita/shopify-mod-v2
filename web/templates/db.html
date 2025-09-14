@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Base de datos</h3>
+  <p class="muted">Importa un volcado SQL o exporta el esquema y datos actuales.</p>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  {% if success %}
+    <p style="color:#065f46;">{{ success }}</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h4>Importar desde archivo .sql</h4>
+  <form action="/db/import" method="post" enctype="multipart/form-data">
+    <div style="margin-bottom:12px;">
+      <label for="dump">Archivo SQL</label>
+      <input type="file" id="dump" name="file" accept=".sql" required>
+    </div>
+    <button class="btn btn-primary" type="submit">Importar</button>
+    <p class="muted" style="margin-top:8px;">Requiere .env con credenciales MySQL correctas.</p>
+  </form>
+</div>
+
+<div class="card">
+  <h4>Exportar base de datos</h4>
+  <a class="btn" href="/db/export">Descargar dump SQL</a>
+  <p class="muted" style="margin-top:8px;">Genera un archivo con estructura y datos.</p>
+  <p class="muted">Alternativa CLI: <code>python scripts/export_db.py</code></p>
+</div>
+{% endblock %}
+

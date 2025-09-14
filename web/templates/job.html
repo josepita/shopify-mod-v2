@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Trabajo: {{ job_id }}</h3>
+  <p>Estado: <span id="status">{{ status }}</span></p>
+  <div>
+    <pre id="logBox">Cargando logs...</pre>
+  </div>
+  <div style="margin-top:8px;">
+    <a class="btn" href="/">Ir al inicio</a>
+  </div>
+</div>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const logBox = document.getElementById('logBox');
+
+  async function poll() {
+    try {
+      const res = await fetch(window.location.pathname + '/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      statusEl.textContent = data.status;
+      const text = (data.logs || []).join('\n');
+      logBox.textContent = text || '(sin logs todavía)';
+      if (data.error) {
+        logBox.textContent += '\n\nERROR: ' + data.error;
+      }
+      if (data.status === 'done' || data.status === 'error') return; // detener
+    } catch (e) {
+      // Ignorar errores transitorios
+    }
+    setTimeout(poll, 1500);
+  }
+
+  poll();
+</script>
+{% endblock %}
+

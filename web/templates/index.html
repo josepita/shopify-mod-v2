@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <form action="/preview" method="post" enctype="multipart/form-data">
+    <div style="margin-bottom:12px;">
+      <label for="file">Archivo de productos (XLS/XLSX/CSV)</label>
+      <input type="file" id="file" name="file" required>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label for="n">Número de líneas a procesar</label>
+      <input type="number" id="n" name="n" value="10" min="1">
+    </div>
+    <div>
+      <button class="btn" type="submit">Previsualizar (screen-N)</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <form action="/run" method="post" enctype="multipart/form-data">
+    <div style="margin-bottom:12px;">
+      <label for="file2">Ejecutar contra API de Shopify</label>
+      <input type="file" id="file2" name="file" required>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label for="n2">Número de líneas a procesar</label>
+      <input type="number" id="n2" name="n" value="50" min="1">
+    </div>
+    <div>
+      <button class="btn btn-primary" type="submit">Ejecutar (api-N)</button>
+    </div>
+    <p class="muted" style="margin-top:8px;">Se requiere configurar .env para conectar con Shopify y MySQL.</p>
+  </form>
+</div>
+{% endblock %}
+

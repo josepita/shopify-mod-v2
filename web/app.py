@@ -8,13 +8,18 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .job_manager import job_manager, Job
 from utils.helpers import group_variants, clean_value
 from utils.prepare import prepare_product_data, prepare_variants_data
+from config.settings import MYSQL_CONFIG
+import mysql.connector  # type: ignore
+import datetime as _dt
+from pathlib import Path
+import importlib
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -77,6 +82,14 @@ def _load_dataframe_for_preview(path: Path) -> Optional[object]:
 def index(request: Request):
     return templates.TemplateResponse(
         "index.html",
+        {"request": request}
+    )
+
+
+@app.get("/db", response_class=HTMLResponse)
+def db_tools(request: Request):
+    return templates.TemplateResponse(
+        "db.html",
         {"request": request}
     )
 
@@ -257,3 +270,60 @@ def job_status(job_id: str, tail: int = 200):
         "error": job.error_message,
         "logs": job.get_logs(tail=tail),
     }
+
+
+@app.post("/db/import", response_class=HTMLResponse)
+def import_database(request: Request, file: UploadFile = File(...)):
+    try:
+        sql_bytes = file.file.read()
+        sql_text = sql_bytes.decode("utf-8", errors="ignore")
+
+        cnx = mysql.connector.connect(
+            host=MYSQL_CONFIG.get("host"),
+            user=MYSQL_CONFIG.get("user"),
+            password=MYSQL_CONFIG.get("password"),
+            database=MYSQL_CONFIG.get("database"),
+            port=MYSQL_CONFIG.get("port", 3306),
+            autocommit=False,
+            allow_multi_statements=True,
+        )
+        cur = cnx.cursor()
+        for _ in cur.execute(sql_text, multi=True):
+            pass
+        cnx.commit()
+        cur.close()
+        cnx.close()
+
+        return templates.TemplateResponse(
+            "db.html",
+            {
+                "request": request,
+                "success": f"Importación completada desde {file.filename}",
+            },
+        )
+    except Exception as e:
+        return templates.TemplateResponse(
+            "db.html",
+            {
+                "request": request,
+                "error": f"Error importando base de datos: {e}",
+            },
+            status_code=500,
+        )
+
+
+@app.get("/db/export")
+def export_database():
+    try:
+        # Reutilizar el exportador del script
+        exporter = importlib.import_module("scripts.export_db")
+        ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_path = BASE_DIR / "backups" / f"dump-{ts}.sql"
+        path = exporter.export_database(out_path)
+        return FileResponse(
+            str(path),
+            media_type="application/sql",
+            filename=path.name,
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
