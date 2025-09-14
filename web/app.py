@@ -45,6 +45,8 @@ ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+DIFFS_DIR = BASE_DIR / "data" / "catalog_diffs"
+DIFFS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 app = FastAPI(title="Shopify Sync UI", version="0.1.0")
@@ -339,6 +341,122 @@ def _save_catalog_metadata(df, dest: Path, source: str) -> None:
         pass
 
 
+def _list_snapshot_stats(limit: int = 100):
+    """Devuelve lista de snapshots con métricas agregadas."""
+    try:
+        cnx = mysql.connector.connect(
+            host=MYSQL_CONFIG.get("host"),
+            user=MYSQL_CONFIG.get("user"),
+            password=MYSQL_CONFIG.get("password"),
+            database=MYSQL_CONFIG.get("database"),
+            port=MYSQL_CONFIG.get("port", 3306),
+        )
+        cur = cnx.cursor()
+        cur.execute(
+            """
+            SELECT snapshot_date,
+                   COUNT(*) AS rows,
+                   SUM(CASE WHEN precio IS NULL OR precio=0 THEN 1 ELSE 0 END) AS zero_price,
+                   SUM(CASE WHEN stock IS NULL OR stock=0 THEN 1 ELSE 0 END) AS zero_stock
+            FROM catalog_snapshots
+            GROUP BY snapshot_date
+            ORDER BY snapshot_date DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        out = []
+        for sd, rows, zp, zs in cur.fetchall():
+            rows = int(rows or 0)
+            zp = int(zp or 0)
+            zs = int(zs or 0)
+            out.append(
+                {
+                    "snapshot_date": sd.strftime("%Y-%m-%d %H:%M:%S") if sd else "",
+                    "rows": rows,
+                    "pct_zero_price": round((zp / rows) * 100, 2) if rows else 0.0,
+                    "pct_zero_stock": round((zs / rows) * 100, 2) if rows else 0.0,
+                }
+            )
+        cur.close(); cnx.close()
+        return out
+    except Exception:
+        return []
+
+
+def _load_snapshot_as_df(snapshot_date: str):
+    """Carga un snapshot desde MySQL a un DataFrame minimal (REFERENCIA, DESCRIPCION, PRECIO, STOCK)."""
+    try:
+        import pandas as pd  # type: ignore
+    except Exception:
+        return None
+    cnx = mysql.connector.connect(
+        host=MYSQL_CONFIG.get("host"),
+        user=MYSQL_CONFIG.get("user"),
+        password=MYSQL_CONFIG.get("password"),
+        database=MYSQL_CONFIG.get("database"),
+        port=MYSQL_CONFIG.get("port", 3306),
+    )
+    cur = cnx.cursor()
+    cur.execute(
+        """
+        SELECT reference AS REFERENCIA,
+               descripcion AS DESCRIPCION,
+               precio AS PRECIO,
+               stock AS STOCK
+        FROM catalog_snapshots
+        WHERE snapshot_date = %s
+        """,
+        (snapshot_date,),
+    )
+    rows = cur.fetchall()
+    cur.close(); cnx.close()
+    if not rows:
+        return None
+    import pandas as pd  # type: ignore
+    df = pd.DataFrame(rows, columns=["REFERENCIA","DESCRIPCION","PRECIO","STOCK"])
+    return df
+
+
+def _compute_diffs_and_save(df_new, df_old, prefix: str):
+    """Calcula diffs de precio/stock/bajas y guarda CSVs en DIFFS_DIR. Devuelve rutas creadas."""
+    import pandas as pd  # type: ignore
+    ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Asegurar tipos
+    for df in (df_new, df_old):
+        df["PRECIO"] = pd.to_numeric(df["PRECIO"], errors="coerce")
+        df["STOCK"] = pd.to_numeric(df["STOCK"], errors="coerce").fillna(0).astype(int)
+    # Merge por referencia
+    m = pd.merge(
+        df_new[["REFERENCIA","DESCRIPCION","PRECIO","STOCK"]],
+        df_old[["REFERENCIA","PRECIO","STOCK"]],
+        on="REFERENCIA",
+        how="inner",
+        suffixes=("_nuevo","_anterior"),
+    )
+    # Cambios de precio
+    m["DIFERENCIA_PRECIO"] = (m["PRECIO_nuevo"] - m["PRECIO_anterior"]).round(2)
+    cambios_precio = m[m["DIFERENCIA_PRECIO"].abs() > 0.01][[
+        "REFERENCIA","DESCRIPCION","PRECIO_anterior","PRECIO_nuevo","DIFERENCIA_PRECIO","STOCK_nuevo"
+    ]]
+    # Cambios de stock
+    m["DIFERENCIA_STOCK"] = m["STOCK_nuevo"] - m["STOCK_anterior"]
+    cambios_stock = m[m["DIFERENCIA_STOCK"] != 0][[
+        "REFERENCIA","DESCRIPCION","STOCK_anterior","STOCK_nuevo","DIFERENCIA_STOCK"
+    ]]
+    # Bajas = en old y no en new
+    bajas_refs = set(df_old["REFERENCIA"]) - set(df_new["REFERENCIA"])
+    bajas = df_old[df_old["REFERENCIA"].isin(bajas_refs)][["REFERENCIA","DESCRIPCION"]]
+    # Guardar
+    out_precio = DIFFS_DIR / f"{prefix}-precios-{ts}.csv"
+    out_stock = DIFFS_DIR / f"{prefix}-stock-{ts}.csv"
+    out_bajas = DIFFS_DIR / f"{prefix}-bajas-{ts}.csv"
+    cambios_precio.to_csv(out_precio, index=False)
+    cambios_stock.to_csv(out_stock, index=False)
+    bajas.to_csv(out_bajas, index=False)
+    return [out_precio, out_stock, out_bajas]
+
+
 def _fetch_mappings_for_refs(refs: list[str]):
     if not refs:
         return set(), {}, {}
@@ -567,6 +685,96 @@ def db_tools(request: Request):
         "db.html",
         {"request": request}
     )
+
+
+@app.get("/catalog/archive", response_class=HTMLResponse)
+def catalog_archive(request: Request, limit: int = 50):
+    snapshots = _list_snapshot_stats(limit=limit)
+    return templates.TemplateResponse(
+        "archive.html",
+        {"request": request, "snapshots": snapshots, "limit": limit}
+    )
+
+
+@app.get("/catalog/compare", response_class=HTMLResponse)
+def catalog_compare(request: Request, a: str = "", b: str = ""):
+    """Pantalla para comparar catálogos subidos o snapshots archivados."""
+    snaps = _list_snapshot_stats(limit=100)
+    return templates.TemplateResponse(
+        "compare.html",
+        {"request": request, "snapshots": snaps, "a": a, "b": b}
+    )
+
+
+def _run_compare_job(job: Job, mode: str, params: dict):
+    job.status = 'running'
+    job.started_at = time.time()
+    job.append_log('Iniciando comparación de catálogos...\n')
+    try:
+        import pandas as pd  # type: ignore
+        if mode == 'upload':
+            p1: Path = params['path1']
+            p2: Path = params['path2']
+            job.append_log(f"Leyendo archivos: {p1.name} vs {p2.name}\n")
+            df1 = _load_dataframe_for_preview(p1)
+            df2 = _load_dataframe_for_preview(p2)
+        else:
+            s1: str = params['snap1']
+            s2: str = params['snap2']
+            job.append_log(f"Leyendo snapshots: {s1} vs {s2}\n")
+            df1 = _load_snapshot_as_df(s1)
+            df2 = _load_snapshot_as_df(s2)
+        if df1 is None or df2 is None:
+            raise RuntimeError('No se pudieron cargar los datos (formato o snapshot inválido)')
+        # Normalizar cabeceras
+        def norm(df):
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            needed = ['REFERENCIA','DESCRIPCION','PRECIO','STOCK']
+            missing = [c for c in needed if c not in df.columns]
+            if missing:
+                raise RuntimeError(f"Faltan columnas requeridas: {', '.join(missing)}")
+            return df
+        df1 = norm(df1)
+        df2 = norm(df2)
+        # df1 = reciente, df2 = anterior
+        outs = _compute_diffs_and_save(df1, df2, prefix='diff')
+        for p in outs:
+            job.append_log(f"Generado: {p}\n")
+        job.append_log('Comparación finalizada.\n')
+        job.status = 'done'
+    except Exception as e:
+        job.status = 'error'
+        job.error_message = str(e)
+        job.append_log(f"ERROR: {e}\n")
+
+
+@app.post('/catalog/compare/run', response_class=HTMLResponse)
+def catalog_compare_run(request: Request, mode: str = Form(...), csv1: UploadFile | None = File(None), csv2: UploadFile | None = File(None), snap1: str = Form(""), snap2: str = Form("")):
+    job = job_manager.create(filename='compare-catalogs')
+    if mode == 'upload':
+        if not csv1 or not csv2:
+            return RedirectResponse(url=f"/catalog/compare?msg=falta_archivo", status_code=303)
+        p1 = UPLOAD_DIR / f"{job.id}-A-{os.path.basename(csv1.filename)}"
+        p2 = UPLOAD_DIR / f"{job.id}-B-{os.path.basename(csv2.filename)}"
+        _save_upload(csv1, p1)
+        _save_upload(csv2, p2)
+        params = { 'path1': p1, 'path2': p2 }
+    else:
+        if not snap1 or not snap2:
+            return RedirectResponse(url=f"/catalog/compare?msg=falta_snapshot", status_code=303)
+        params = { 'snap1': snap1, 'snap2': snap2 }
+    thread = threading.Thread(target=_run_compare_job, args=(job, mode, params), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+@app.get('/files/catalog_diffs/{name}')
+def get_catalog_diff(name: str):
+    safe = os.path.basename(name)
+    path = DIFFS_DIR / safe
+    if not path.exists():
+        return JSONResponse({"error": "Archivo no encontrado"}, status_code=404)
+    return FileResponse(str(path), media_type='text/csv', filename=path.name)
 
 
 @app.get("/catalog", response_class=HTMLResponse)

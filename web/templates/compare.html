@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <h3 class="h5">Comparar catálogos</h3>
+  <p class="text-muted">Compara dos catálogos para detectar cambios de precio, cambios de stock y referencias dadas de baja. El resultado se guarda como CSV descargable y podrás ver el progreso en la vista de trabajos.</p>
+  <div class="row g-3 mt-1">
+    <div class="col-md-6">
+      <div class="border rounded p-3 h-100">
+        <h4 class="h6">Subir archivos</h4>
+        <form action="/catalog/compare/run" method="post" enctype="multipart/form-data" class="mt-2">
+          <input type="hidden" name="mode" value="upload">
+          <div class="mb-2">
+            <label for="csv1">CSV reciente</label>
+            <input class="form-control" type="file" id="csv1" name="csv1" accept=".csv,.xls,.xlsx" required>
+          </div>
+          <div class="mb-2">
+            <label for="csv2">CSV anterior</label>
+            <input class="form-control" type="file" id="csv2" name="csv2" accept=".csv,.xls,.xlsx" required>
+          </div>
+          <button class="btn btn-primary" type="submit">Comparar archivos</button>
+        </form>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="border rounded p-3 h-100">
+        <div class="d-flex justify-content-between align-items-center">
+          <h4 class="h6 m-0">Usar catálogos guardados</h4>
+          <a class="btn btn-sm btn-outline-secondary" href="/catalog/archive">Ver explorador</a>
+        </div>
+        <form action="/catalog/compare/run" method="post" class="mt-2">
+          <input type="hidden" name="mode" value="snapshots">
+          <div class="mb-2">
+            <label for="snap1">Snapshot reciente</label>
+            <select class="form-select" id="snap1" name="snap1" required>
+              <option value="" disabled selected>Selecciona…</option>
+              {% for s in snapshots %}
+                <option value="{{ s.snapshot_date }}" {% if a and a==s.snapshot_date %}selected{% endif %}>{{ s.snapshot_date }} — {{ s.rows }} filas</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-2">
+            <label for="snap2">Snapshot anterior</label>
+            <select class="form-select" id="snap2" name="snap2" required>
+              <option value="" disabled selected>Selecciona…</option>
+              {% for s in snapshots %}
+                <option value="{{ s.snapshot_date }}" {% if b and b==s.snapshot_date %}selected{% endif %}>{{ s.snapshot_date }} — {{ s.rows }} filas</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn-outline-primary" type="submit">Comparar snapshots</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
