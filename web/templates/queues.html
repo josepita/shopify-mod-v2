@@ -5,11 +5,29 @@
   <div class="row row-cols-2 row-cols-md-4 g-2">
     <div class="col"><div class="p-2 border rounded">Precios pendientes: <strong>{{ counts.prices_pending }}</strong></div></div>
     <div class="col"><div class="p-2 border rounded">Stock pendientes: <strong>{{ counts.stock_pending }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Último snapshot: <strong>{{ snapshot.latest or '—' }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Filas snapshot: <strong>{{ snapshot.rows }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">ETA: <strong id="etaBox">—</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Avance: <strong id="pctBox">—</strong></div></div>
+  </div>
+  <div class="mt-3">
+    <div class="d-flex align-items-center gap-2">
+      <div>Procesador: <strong id="procState">Detenido</strong></div>
+      <button class="btn btn-sm btn-outline-success" id="btnStart">Arrancar</button>
+      <button class="btn btn-sm btn-outline-danger" id="btnStop">Parar</button>
+      <a class="btn btn-sm btn-outline-secondary" id="btnJob" href="#" style="display:none;">Ver job</a>
+      <form id="retryForm" action="/queues/retry_errors" method="post" class="d-inline">
+        <button class="btn btn-sm btn-outline-primary" type="submit">Reintentar errores</button>
+      </form>
+      <form id="clearErrForm" action="/queues/clear_errors" method="post" class="d-inline">
+        <button class="btn btn-sm btn-outline-secondary" type="submit">Vaciar errores</button>
+      </form>
+    </div>
   </div>
 </div>
 
 <div class="card p-3 mb-3">
-  <form action="/queues/process" method="post" class="d-flex gap-2 align-items-end">
+  <form id="processForm" action="/queues/process" method="post" class="d-flex gap-2 align-items-end">
     <div>
       <label for="type">Tipo</label>
       <select class="form-select" id="type" name="type">
@@ -28,6 +46,16 @@
     </div>
     <button class="btn btn-primary" type="submit">Procesar</button>
   </form>
+  <div id="liveStatus" class="mt-3" style="display:none;">
+    <div class="text-muted mb-2">Estado en directo</div>
+    <div class="row row-cols-2 row-cols-md-4 g-2">
+      <div class="col"><div class="p-2 border rounded">Precios pendientes: <strong id="pPend">—</strong></div></div>
+      <div class="col"><div class="p-2 border rounded">Stock pendientes: <strong id="sPend">—</strong></div></div>
+      <div class="col"><div class="p-2 border rounded">Último snapshot: <strong id="snapTs">—</strong></div></div>
+      <div class="col"><div class="p-2 border rounded">Filas snapshot: <strong id="snapRows">—</strong></div></div>
+    </div>
+    <pre id="liveLogs" class="mt-2" style="background:#0f172a;color:#e5e7eb;padding:12px;border-radius:6px;max-height:360px;overflow:auto;"></pre>
+  </div>
 </div>
 
 <div class="card p-3 mb-3">
@@ -48,6 +76,101 @@
     <button class="btn btn-outline-primary" type="submit">Detectar y llenar colas</button>
   </form>
 </div>
+<script>
+  // Interceptar el submit y lanzar proceso en JSON para mostrar progreso en esta página
+  const form = document.getElementById('processForm');
+  const live = document.getElementById('liveStatus');
+  const logEl = document.getElementById('liveLogs');
+  const pPend = document.getElementById('pPend');
+  const sPend = document.getElementById('sPend');
+  const snapTs = document.getElementById('snapTs');
+  const snapRows = document.getElementById('snapRows');
+  let currentJob = null;
+  async function pollProcessor() {
+    try {
+      const r = await fetch('/queues/processor/status');
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = d.status || {};
+      document.getElementById('procState').textContent = st.running ? 'En ejecución' : 'Detenido';
+      if (st.job_id) {
+        const a = document.getElementById('btnJob');
+        a.href = `/jobs/${st.job_id}`;
+        a.style.display = '';
+      }
+      document.getElementById('etaBox').textContent = (st.eta_min != null) ? `${st.eta_min.toFixed(1)} min` : '—';
+      document.getElementById('pctBox').textContent = (st.percent != null) ? `${st.percent.toFixed(1)}%` : '—';
+    } catch {}
+  }
+
+  async function pollStats() {
+    try {
+      const r = await fetch('/queues/stats');
+      if (!r.ok) return;
+      const d = await r.json();
+      pPend.textContent = d.counts?.prices_pending ?? '—';
+      sPend.textContent = d.counts?.stock_pending ?? '—';
+      snapTs.textContent = d.snapshot?.latest ?? '—';
+      snapRows.textContent = d.snapshot?.rows ?? '—';
+    } catch {}
+  }
+
+  async function pollJob(jobId) {
+    try {
+      const r = await fetch(`/jobs/${jobId}/status`);
+      if (!r.ok) return;
+      const d = await r.json();
+      const lines = (d.logs || []).join('\n');
+      logEl.textContent = lines || '(sin logs todavía)';
+      await pollStats();
+      if (d.status === 'done' || d.status === 'error') {
+        currentJob = null;
+        return;
+      }
+    } catch {}
+    setTimeout(() => pollJob(jobId), 1500);
+  }
+
+  form?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      const fd = new FormData(form);
+      const r = await fetch('/queues/process_json', { method: 'POST', body: fd });
+      if (!r.ok) { form.submit(); return; }
+      const d = await r.json();
+      currentJob = d.job_id;
+      live.style.display = '';
+      logEl.textContent = 'Iniciando…';
+      pollJob(currentJob);
+    } catch {
+      form.submit();
+    }
+  });
+
+  // Refrescar stats cada pocos segundos aunque no haya job
+  setInterval(pollStats, 3000);
+  pollStats();
+  setInterval(pollProcessor, 3000);
+  pollProcessor();
+
+  // Controles procesador Arrancar/Parar
+  document.getElementById('btnStart')?.addEventListener('click', async () => {
+    try {
+      const p = new URLSearchParams();
+      p.append('type', (document.getElementById('type')?.value || 'all'));
+      p.append('batch', (document.getElementById('batch')?.value || '50'));
+      p.append('margin', (document.getElementById('margin')?.value || '{{ default_margin or 2.2 }}'));
+      await fetch('/queues/processor/start', { method: 'POST', body: p });
+      pollProcessor();
+    } catch {}
+  });
+  document.getElementById('btnStop')?.addEventListener('click', async () => {
+    try {
+      await fetch('/queues/processor/stop', { method: 'POST' });
+      pollProcessor();
+    } catch {}
+  });
+</script>
 
 <div class="card p-3 mb-3">
   <h4 class="h6">Forzar llenado de colas (snapshot actual)</h4>

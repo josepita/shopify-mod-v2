@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from .job_manager import job_manager, Job
 from utils.helpers import group_variants, clean_value, get_base_reference
 from utils.prepare import prepare_product_data, prepare_variants_data
-from config.settings import MYSQL_CONFIG, CSV_URL, CSV_USERNAME, CSV_PASSWORD, PRICE_MARGIN
+from config.settings import MYSQL_CONFIG, CSV_URL, CSV_USERNAME, CSV_PASSWORD, PRICE_MARGIN, MAX_QUEUE_RETRIES
 import mysql.connector  # type: ignore
 import datetime as _dt
 from pathlib import Path
@@ -30,6 +30,8 @@ from utils.validator import validate_catalog_df
 import requests
 from bs4 import BeautifulSoup
 import re
+import threading as _threading
+import time as _time
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -933,23 +935,38 @@ def export_database():
 
 @app.get("/queues", response_class=HTMLResponse)
 def queues_page(request: Request, limit: int = 50):
-    counts = qm.get_queue_counts()
-    pending_prices = qm.list_pending_prices(limit=limit)
-    pending_stock = qm.list_pending_stock(limit=limit)
+    try:
+        counts = qm.get_queue_counts()
+    except Exception:
+        counts = {"prices_pending": 0, "stock_pending": 0}
+    try:
+        snap = qm.snapshot_stats()
+    except Exception:
+        snap = {"latest": None, "rows": 0}
+    try:
+        pending_prices = qm.list_pending_prices(limit=limit)
+    except Exception:
+        pending_prices = []
+    try:
+        pending_stock = qm.list_pending_stock(limit=limit)
+    except Exception:
+        pending_stock = []
     return templates.TemplateResponse(
         "queues.html",
         {
             "request": request,
             "counts": counts,
+            "snapshot": snap,
             "pending_prices": pending_prices,
             "pending_stock": pending_stock,
             "limit": limit,
             "default_margin": PRICE_MARGIN,
+            "max_retries": MAX_QUEUE_RETRIES,
         },
     )
 
 
-def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = PRICE_MARGIN):
+def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = PRICE_MARGIN) -> int:
     job.append_log("Iniciando procesamiento de cola de precios...\n")
     gql = ShopifyGraphQL()
     processed = 0
@@ -957,16 +974,21 @@ def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = PRICE
     for it in items:
         try:
             ok = gql.bulk_update_variant_price(str(it["shopify_product_id"]), str(it["shopify_variant_id"]), float(it["new_price"]), margin=margin)
-            qm.mark_queue_status("price_updates_queue", it["id"], "completed" if ok else "error")
+            qm.mark_queue_status("price_updates_queue", it["id"], "completed" if ok else "processing")
+            if not ok:
+                qm.register_error("price_updates_queue", it["id"], "GraphQL update failed")
+            else:
+                qm.mark_queue_status("price_updates_queue", it["id"], "completed")
             processed += 1
             job.append_log(f"Precio SKU {it['sku']}: {'OK' if ok else 'ERROR'}\n")
         except Exception as e:
-            qm.mark_queue_status("price_updates_queue", it["id"], "error")
+            qm.register_error("price_updates_queue", it["id"], str(e))
             job.append_log(f"Error precio SKU {it['sku']}: {e}\n")
-    job.append_log(f"Procesados precios: {processed}\n")
+    job.append_log(f"Procesados precios (lote): {processed}\n")
+    return processed
 
 
-def _process_stock_queues(job: Job, batch_limit: int = 50):
+def _process_stock_queues(job: Job, batch_limit: int = 50) -> int:
     job.append_log("Iniciando procesamiento de cola de stock...\n")
     # Reusar setup REST para niveles de inventario
     try:
@@ -996,9 +1018,10 @@ def _process_stock_queues(job: Job, batch_limit: int = 50):
             processed += 1
             job.append_log(f"Stock SKU {it['sku']}: OK\n")
         except Exception as e:
-            qm.mark_queue_status("stock_updates_queue", it["id"], "error")
+            qm.register_error("stock_updates_queue", it["id"], str(e))
             job.append_log(f"Error stock SKU {it['sku']}: {e}\n")
-    job.append_log(f"Procesados stock: {processed}\n")
+    job.append_log(f"Procesados stock (lote): {processed}\n")
+    return processed
 
 
 def _run_queue_job(job: Job, process_type: str = "all", batch_limit: int = 50, margin: float = PRICE_MARGIN):
@@ -1022,6 +1045,42 @@ def queues_process(request: Request, type: str = Form("all"), batch: int = Form(
     thread = threading.Thread(target=_run_queue_job, args=(job, type, batch, m), daemon=True)
     thread.start()
     return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+@app.post("/queues/process_json")
+def queues_process_json(request: Request, type: str = Form("all"), batch: int = Form(50), margin: float = Form(None)):
+    job = job_manager.create(filename=f"queues-{type}")
+    m = float(margin) if margin is not None else PRICE_MARGIN
+    thread = threading.Thread(target=_run_queue_job, args=(job, type, batch, m), daemon=True)
+    thread.start()
+    return {"job_id": job.id}
+
+
+@app.get("/queues/stats")
+def queues_stats():
+    try:
+        counts = qm.get_queue_counts()
+    except Exception:
+        counts = {"prices_pending": 0, "stock_pending": 0}
+    try:
+        snap = qm.snapshot_stats()
+    except Exception:
+        snap = {"latest": None, "rows": 0}
+    return {"counts": counts, "snapshot": snap}
+
+
+@app.post("/queues/retry_errors")
+def queues_retry_errors():
+    p = qm.retry_errors("price_updates_queue")
+    s = qm.retry_errors("stock_updates_queue")
+    return RedirectResponse(url="/queues", status_code=303)
+
+
+@app.post("/queues/clear_errors")
+def queues_clear_errors():
+    p = qm.clear_errors("price_updates_queue")
+    s = qm.clear_errors("stock_updates_queue")
+    return RedirectResponse(url="/queues", status_code=303)
 
 
 def _run_detect_job(job: Job, detect_type: str = "all", limit: int | None = None):
@@ -1075,3 +1134,155 @@ def queues_force(request: Request, type: str = Form("all"), limit: int = Form(0)
     thread = threading.Thread(target=_run_force_job, args=(job, type, (limit or None)), daemon=True)
     thread.start()
     return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+# =====================
+# Procesador continuo (arrancar/parar) con lotes
+# =====================
+
+class _ProcessorState:
+    def __init__(self) -> None:
+        self.running: bool = False
+        self.process_type: str = "all"
+        self.batch: int = 50
+        self.margin: float = PRICE_MARGIN
+        self.started_at: float | None = None
+        self.last_tick_at: float | None = None
+        self.proc_prices: int = 0
+        self.proc_stock: int = 0
+        self.job: Job | None = None
+        self._stop = _threading.Event()
+        self._thread: _threading.Thread | None = None
+        self.total_goal: int = 0
+
+    def to_dict(self) -> dict:
+        # Calcular ETA/porcentaje con la info disponible
+        try:
+            counts = qm.get_queue_counts()
+        except Exception:
+            counts = {"prices_pending": 0, "stock_pending": 0}
+        remaining = 0
+        if self.process_type in ("all", "prices"):
+            remaining += int(counts.get("prices_pending", 0))
+        if self.process_type in ("all", "stock"):
+            remaining += int(counts.get("stock_pending", 0))
+        done = (self.total_goal - remaining) if self.total_goal else (self.proc_prices + self.proc_stock)
+        elapsed = ( (_time.time() - (self.started_at or _time.time())) if self.running else 0 )
+        rate = (done / elapsed) if (elapsed > 0 and done > 0) else 0
+        eta_min = (remaining / rate / 60) if rate > 0 else None
+        percent = (done / (done + remaining) * 100) if (done + remaining) > 0 else 0
+        return {
+            "running": self.running,
+            "type": self.process_type,
+            "batch": self.batch,
+            "margin": self.margin,
+            "started_at": self.started_at,
+            "last_tick_at": self.last_tick_at,
+            "processed_prices": self.proc_prices,
+            "processed_stock": self.proc_stock,
+            "job_id": self.job.id if self.job else None,
+            "eta_min": eta_min,
+            "percent": percent,
+            "total_goal": self.total_goal,
+            "remaining": remaining,
+        }
+
+
+processor = _ProcessorState()
+
+
+def _processor_loop():
+    ps = processor
+    ps.running = True
+    ps.started_at = _time.time()
+    ps.proc_prices = 0
+    ps.proc_stock = 0
+    job = job_manager.create(filename=f"processor-{ps.process_type}")
+    ps.job = job
+    job.status = "running"
+    job.append_log("Procesador iniciado. Ejecutando en lotes...\n")
+    # Contadores iniciales y base para ETA
+    try:
+        q0 = qm.get_queue_counts()
+    except Exception:
+        q0 = {"prices_pending": 0, "stock_pending": 0}
+    ps.total_goal = 0
+    if ps.process_type in ("all", "prices"):
+        ps.total_goal += int(q0.get("prices_pending", 0))
+    if ps.process_type in ("all", "stock"):
+        ps.total_goal += int(q0.get("stock_pending", 0))
+    job.append_log(f"Pendientes iniciales — precios: {q0.get('prices_pending',0)}, stock: {q0.get('stock_pending',0)}, total: {ps.total_goal}\n")
+    try:
+        while not ps._stop.is_set():
+            ps.last_tick_at = _time.time()
+            # Si no hay snapshot, esperar
+            snap = qm.snapshot_stats()
+            if not snap.get("latest"):
+                job.append_log("No hay snapshot. Esperando 5s...\n")
+                _time.sleep(5)
+                continue
+            worked = 0
+            if ps.process_type in ("all", "prices"):
+                w = _process_price_queues(job, batch_limit=ps.batch, margin=ps.margin)
+                ps.proc_prices += w
+                worked += w
+            if ps.process_type in ("all", "stock"):
+                w2 = _process_stock_queues(job, batch_limit=ps.batch)
+                ps.proc_stock += w2
+                worked += w2
+            # Log de avance + ETA
+            try:
+                q = qm.get_queue_counts()
+                remaining = 0
+                if ps.process_type in ("all", "prices"):
+                    remaining += int(q.get("prices_pending", 0))
+                if ps.process_type in ("all", "stock"):
+                    remaining += int(q.get("stock_pending", 0))
+                done = (ps.total_goal - remaining) if ps.total_goal else (ps.proc_prices + ps.proc_stock)
+                elapsed = max(0.001, _time.time() - (ps.started_at or _time.time()))
+                rate = done / elapsed if done > 0 else 0
+                eta_sec = (remaining / rate) if rate > 0 else 0
+                pct = (done / (done + remaining) * 100) if (done + remaining) > 0 else 0
+                job.append_log(
+                    f"Avance: done {done} / {done+remaining} ({pct:.1f}%) — ETA ~ {eta_sec/60:.1f} min"
+                )
+            except Exception:
+                pass
+            if worked == 0:
+                # Nada que hacer, dormir un poco y reintentar
+                _time.sleep(3)
+            else:
+                _time.sleep(0.2)
+    except Exception as e:
+        job.append_log(f"ERROR procesando: {e}\n")
+        job.status = "error"
+        job.error_message = str(e)
+    finally:
+        ps.running = False
+        if job.status != "error":
+            job.status = "done"
+
+
+@app.post("/queues/processor/start")
+def processor_start(type: str = Form("all"), batch: int = Form(50), margin: float = Form(None)):
+    if processor.running:
+        return JSONResponse({"error": "Ya está en ejecución", "status": processor.to_dict()}, status_code=409)
+    processor.process_type = type
+    processor.batch = int(batch)
+    processor.margin = float(margin) if margin is not None else PRICE_MARGIN
+    processor._stop.clear()
+    t = _threading.Thread(target=_processor_loop, daemon=True)
+    processor._thread = t
+    t.start()
+    return {"status": processor.to_dict()}
+
+
+@app.post("/queues/processor/stop")
+def processor_stop():
+    processor._stop.set()
+    return {"status": processor.to_dict()}
+
+
+@app.get("/queues/processor/status")
+def processor_status():
+    return {"status": processor.to_dict()}

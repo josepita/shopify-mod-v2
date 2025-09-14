@@ -6,7 +6,7 @@ Usa mysql-connector como el resto de la capa DB actual.
 """
 from typing import List, Dict, Tuple, Optional
 import mysql.connector  # type: ignore
-from config.settings import MYSQL_CONFIG
+from config.settings import MYSQL_CONFIG, MAX_QUEUE_RETRIES
 
 
 def _get_connection():
@@ -16,17 +16,22 @@ def _get_connection():
         password=MYSQL_CONFIG.get("password"),
         database=MYSQL_CONFIG.get("database"),
         port=MYSQL_CONFIG.get("port", 3306),
+        connection_timeout=5,
     )
 
 
 def get_queue_counts() -> Dict[str, int]:
     cnx = _get_connection()
     cur = cnx.cursor()
-    counts = {"prices_pending": 0, "stock_pending": 0}
+    counts = {"prices_pending": 0, "stock_pending": 0, "prices_error": 0, "stock_error": 0}
     cur.execute("SELECT COUNT(*) FROM price_updates_queue WHERE status='pending'")
     counts["prices_pending"] = int(cur.fetchone()[0])
     cur.execute("SELECT COUNT(*) FROM stock_updates_queue WHERE status='pending'")
     counts["stock_pending"] = int(cur.fetchone()[0])
+    cur.execute("SELECT COUNT(*) FROM price_updates_queue WHERE status='error'")
+    counts["prices_error"] = int(cur.fetchone()[0])
+    cur.execute("SELECT COUNT(*) FROM stock_updates_queue WHERE status='error'")
+    counts["stock_error"] = int(cur.fetchone()[0])
     cur.close(); cnx.close()
     return counts
 
@@ -39,8 +44,8 @@ def list_pending_prices(limit: int = 50) -> List[Dict]:
         SELECT q.id, q.variant_mapping_id, q.new_price, vm.internal_sku, vm.shopify_variant_id, vm.shopify_product_id
         FROM price_updates_queue q
         LEFT JOIN variant_mappings vm ON vm.id = q.variant_mapping_id
-        WHERE q.status = 'pending'
-        ORDER BY q.created_at ASC
+        WHERE q.status = 'pending' AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= NOW())
+        ORDER BY COALESCE(q.next_attempt_at, q.created_at) ASC
         LIMIT %s
         """,
         (int(limit),),
@@ -68,8 +73,8 @@ def list_pending_stock(limit: int = 50) -> List[Dict]:
         SELECT q.id, q.variant_mapping_id, q.new_stock, vm.internal_sku, vm.shopify_variant_id, vm.shopify_product_id, vm.inventory_item_id
         FROM stock_updates_queue q
         LEFT JOIN variant_mappings vm ON vm.id = q.variant_mapping_id
-        WHERE q.status = 'pending'
-        ORDER BY q.created_at ASC
+        WHERE q.status = 'pending' AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= NOW())
+        ORDER BY COALESCE(q.next_attempt_at, q.created_at) ASC
         LIMIT %s
         """,
         (int(limit),),
@@ -291,7 +296,7 @@ def snapshot_stats() -> Dict[str, int | str | None]:
         SELECT COUNT(*)
         FROM catalog_snapshots s
         JOIN variant_mappings vm
-          ON UPPER(TRIM(vm.internal_sku)) = UPPER(TRIM(s.reference))
+          ON vm.internal_sku = s.reference
         WHERE s.snapshot_date = %s
         """,
         (latest,),
@@ -303,7 +308,7 @@ def snapshot_stats() -> Dict[str, int | str | None]:
         SELECT COUNT(*)
         FROM catalog_snapshots s
         JOIN variant_mappings vm
-          ON UPPER(TRIM(vm.internal_sku)) = UPPER(TRIM(s.reference))
+          ON vm.internal_sku = s.reference
         WHERE s.snapshot_date = %s AND s.precio IS NOT NULL
         """,
         (latest,),
@@ -315,7 +320,7 @@ def snapshot_stats() -> Dict[str, int | str | None]:
         SELECT COUNT(*)
         FROM catalog_snapshots s
         JOIN variant_mappings vm
-          ON UPPER(TRIM(vm.internal_sku)) = UPPER(TRIM(s.reference))
+          ON vm.internal_sku = s.reference
         WHERE s.snapshot_date = %s AND s.stock IS NOT NULL
         """,
         (latest,),
@@ -327,8 +332,10 @@ def snapshot_stats() -> Dict[str, int | str | None]:
     cur.execute("SELECT COUNT(*) FROM stock_updates_queue WHERE status='pending'")
     stock_pending = int(cur.fetchone()[0])
     cur.close(); cnx.close()
+    # Serializar fecha para JSON/UI
+    latest_str = latest.strftime("%Y-%m-%d %H:%M:%S") if latest else None
     return {
-        "latest": latest,
+        "latest": latest_str,
         "rows": rows,
         "mapped": mapped,
         "price_candidates": price_candidates,
@@ -336,3 +343,66 @@ def snapshot_stats() -> Dict[str, int | str | None]:
         "price_pending": price_pending,
         "stock_pending": stock_pending,
     }
+
+
+# Retry helpers
+
+def backoff_seconds(attempts: int) -> int:
+    # Exponencial con límite de 300s
+    sec = 2 ** max(0, attempts)
+    return int(sec if sec < 300 else 300)
+
+
+def register_error(table: str, item_id: int, error_msg: str) -> None:
+    cnx = _get_connection()
+    cur = cnx.cursor()
+    # Leer attempts actuales
+    cur.execute(f"SELECT attempts FROM {table} WHERE id=%s", (int(item_id),))
+    row = cur.fetchone()
+    att = int(row[0]) if row and row[0] is not None else 0
+    att_next = att + 1
+    if att_next >= MAX_QUEUE_RETRIES:
+        # Marcar como error definitivo
+        cur.execute(
+            f"UPDATE {table} SET status='error', attempts=%s, last_error=%s, last_attempt_at=NOW() WHERE id=%s",
+            (att_next, error_msg[:1000], int(item_id)),
+        )
+    else:
+        # Reprogramar a pending con backoff
+        delay = backoff_seconds(att_next)
+        cur.execute(
+            f"UPDATE {table} SET status='pending', attempts=%s, last_error=%s, last_attempt_at=NOW(), next_attempt_at=DATE_ADD(NOW(), INTERVAL %s SECOND) WHERE id=%s",
+            (att_next, error_msg[:1000], delay, int(item_id)),
+        )
+    cnx.commit()
+    cur.close(); cnx.close()
+
+
+def retry_errors(table: str) -> int:
+    cnx = _get_connection()
+    cur = cnx.cursor()
+    cur.execute(f"UPDATE {table} SET status='pending', next_attempt_at=NULL WHERE status='error'")
+    count = cur.rowcount
+    cnx.commit()
+    cur.close(); cnx.close()
+    return int(count)
+
+
+def clear_pending(table: str) -> int:
+    cnx = _get_connection()
+    cur = cnx.cursor()
+    cur.execute(f"DELETE FROM {table} WHERE status='pending'")
+    count = cur.rowcount
+    cnx.commit()
+    cur.close(); cnx.close()
+    return int(count)
+
+
+def clear_errors(table: str) -> int:
+    cnx = _get_connection()
+    cur = cnx.cursor()
+    cur.execute(f"DELETE FROM {table} WHERE status='error'")
+    count = cur.rowcount
+    cnx.commit()
+    cur.close(); cnx.close()
+    return int(count)

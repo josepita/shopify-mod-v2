@@ -68,6 +68,10 @@ def create_tables(connection) -> None:
             status ENUM('pending','processing','completed','error') DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             processed_at TIMESTAMP NULL,
+            attempts INT DEFAULT 0,
+            last_error TEXT NULL,
+            last_attempt_at TIMESTAMP NULL,
+            next_attempt_at TIMESTAMP NULL,
             INDEX idx_status (status),
             INDEX idx_created_at (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -81,6 +85,10 @@ def create_tables(connection) -> None:
             status ENUM('pending','processing','completed','error') DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             processed_at TIMESTAMP NULL,
+            attempts INT DEFAULT 0,
+            last_error TEXT NULL,
+            last_attempt_at TIMESTAMP NULL,
+            next_attempt_at TIMESTAMP NULL,
             INDEX idx_status (status),
             INDEX idx_created_at (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -545,6 +553,24 @@ def apply_safe_upgrades(connection) -> List[str]:
             cursor.execute(sql)
             executed.append(f"CREATE TABLE {tname}")
 
+    # Añadir columnas de reintentos/errores si faltan en colas
+    for table in ("price_updates_queue", "stock_updates_queue"):
+        if table in existing_tables:
+            cols = _fetch_columns(cursor, table)
+            add_cols = []
+            if "attempts" not in cols:
+                add_cols.append("ADD COLUMN attempts INT DEFAULT 0")
+            if "last_error" not in cols:
+                add_cols.append("ADD COLUMN last_error TEXT NULL")
+            if "last_attempt_at" not in cols:
+                add_cols.append("ADD COLUMN last_attempt_at TIMESTAMP NULL")
+            if "next_attempt_at" not in cols:
+                add_cols.append("ADD COLUMN next_attempt_at TIMESTAMP NULL")
+            if add_cols:
+                alter = f"ALTER TABLE {table} " + ", ".join(add_cols)
+                cursor.execute(alter)
+                executed.append(alter)
+
     connection.commit()
     return executed
 
@@ -572,6 +598,13 @@ def run_migrations():
         # Crear tablas que falten (no altera tablas existentes)
         create_tables(connection)
         connection.commit()
+
+        # Aplicar mejoras no destructivas (añadir columnas/índices)
+        executed = apply_safe_upgrades(connection)
+        if executed:
+            print("Safe upgrades aplicadas:")
+            for sql in executed:
+                print(f"- {sql}")
         print("Migraciones completadas exitosamente")
         
     except Error as e:

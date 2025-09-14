@@ -33,6 +33,7 @@ CSV_PASSWORD = os.getenv('CSV_PASSWORD', '')
 
 # Margen de precio por defecto (PVP = coste * PRICE_MARGIN)
 PRICE_MARGIN = float(os.getenv('PRICE_MARGIN', '2.2'))
+MAX_QUEUE_RETRIES = int(os.getenv('MAX_QUEUE_RETRIES', '3'))
 
 # Configuración de logging
 LOG_DIR = 'logs'
