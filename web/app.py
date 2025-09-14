@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from .job_manager import job_manager, Job
 from utils.helpers import group_variants, clean_value, get_base_reference
 from utils.prepare import prepare_product_data, prepare_variants_data
-from config.settings import MYSQL_CONFIG, CSV_URL, CSV_USERNAME, CSV_PASSWORD, PRICE_MARGIN, MAX_QUEUE_RETRIES
+from config.settings import MYSQL_CONFIG, CSV_URL, CSV_USERNAME, CSV_PASSWORD, PRICE_MARGIN, MAX_QUEUE_RETRIES, SHOPIFY_SHOP_URL
 import mysql.connector  # type: ignore
 import datetime as _dt
 from pathlib import Path
@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 import re
 import threading as _threading
 import time as _time
+import time
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -340,7 +341,7 @@ def _save_catalog_metadata(df, dest: Path, source: str) -> None:
 
 def _fetch_mappings_for_refs(refs: list[str]):
     if not refs:
-        return set(), {}
+        return set(), {}, {}
     cnx = mysql.connector.connect(
         host=MYSQL_CONFIG.get("host"),
         user=MYSQL_CONFIG.get("user"),
@@ -350,11 +351,27 @@ def _fetch_mappings_for_refs(refs: list[str]):
     )
     cur = cnx.cursor()
     placeholders = ",".join(["%s"] * len(refs))
+    # Traer también handle e ID para construir URLs
     cur.execute(
-        f"SELECT internal_reference FROM product_mappings WHERE internal_reference IN ({placeholders})",
+        f"SELECT internal_reference, shopify_handle, shopify_product_id FROM product_mappings WHERE internal_reference IN ({placeholders})",
         tuple(refs),
     )
-    existing = {row[0] for row in cur.fetchall()}
+    existing_rows = cur.fetchall()
+    existing = {row[0] for row in existing_rows}
+    # Preparar base de tienda
+    shop_url = (SHOPIFY_SHOP_URL or '').strip().rstrip('/')
+    if shop_url and not shop_url.startswith(('http://', 'https://')):
+        shop_url = 'https://' + shop_url
+    links_map: dict[str, dict] = {}
+    for ref, handle, pid in existing_rows:
+        try:
+            handle = handle or ''
+            pid = int(pid) if pid is not None else None
+        except Exception:
+            pid = None
+        store_url = f"{shop_url}/products/{handle}" if shop_url and handle else None
+        admin_url = f"{shop_url}/admin/products/{pid}" if shop_url and pid else None
+        links_map[str(ref)] = {"store_url": store_url, "admin_url": admin_url}
     cur.execute(
         f"SELECT parent_reference, COUNT(*) FROM variant_mappings WHERE parent_reference IN ({placeholders}) GROUP BY parent_reference",
         tuple(refs),
@@ -362,13 +379,13 @@ def _fetch_mappings_for_refs(refs: list[str]):
     variant_counts = {row[0]: int(row[1]) for row in cur.fetchall()}
     cur.close()
     cnx.close()
-    return existing, variant_counts
+    return existing, variant_counts, links_map
 
 
 def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: str = "", estado: str = "todos"):
     grouped = group_variants(df)
     base_refs = [clean_value(ref) for ref in grouped.keys()]
-    existing_set, variant_counts_map = _fetch_mappings_for_refs(base_refs)
+    existing_set, variant_counts_map, links_map = _fetch_mappings_for_refs(base_refs)
 
     records = []
     total_variants = 0
@@ -388,6 +405,7 @@ def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: s
         # URL imagen original (del CSV)
         imagen_url = clean_value(row.get("IMAGEN 1", ""))
 
+        link_info = links_map.get(base_ref, {}) if base_ref else {}
         rec = {
             "referencia": base_ref,
             "descripcion": descripcion,
@@ -400,6 +418,8 @@ def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: s
             "variantes_subidas": variant_counts_map.get(base_ref, 0),
             "estado": estado_item,
             "imagen_url": imagen_url,
+            "store_url": link_info.get("store_url"),
+            "admin_url": link_info.get("admin_url"),
         }
         records.append(rec)
 
@@ -484,10 +504,50 @@ def catalog_preview(base_ref: str):
         row = info["base_data"]
         product_data = prepare_product_data(row, clean_value(base_ref))
         variants_data = prepare_variants_data(info.get("variants", [])) if info.get("is_variant_product", False) else []
+        # ¿Existe mapeo en MySQL? para decidir Crear/Actualizar
+        exists = False
+        store_url = None
+        admin_url = None
+        try:
+            from db.product_mapper import ProductMapper
+            mapper = ProductMapper(MYSQL_CONFIG)
+            mapping = mapper.get_product_mapping(clean_value(base_ref))
+            exists = mapping is not None
+            if exists and mapping and mapping.get('product'):
+                prod = mapping['product']
+                handle = prod.get('shopify_handle')
+                pid = prod.get('shopify_product_id')
+                shop_url = (SHOPIFY_SHOP_URL or '').strip().rstrip('/')
+                if shop_url and not shop_url.startswith(('http://', 'https://')):
+                    shop_url = 'https://' + shop_url
+                if shop_url and handle:
+                    store_url = f"{shop_url}/products/{handle}"
+                try:
+                    pid_int = int(pid) if pid is not None else None
+                except Exception:
+                    pid_int = None
+                if shop_url and pid_int:
+                    admin_url = f"{shop_url}/admin/products/{pid_int}"
+        except Exception:
+            exists = False
+        # Asegurar que el volcado CSV sea JSON-safe (reemplazar NaN/inf por None)
+        try:
+            import pandas as pd  # type: ignore
+            csv_safe = row.where(pd.notna(row), None).to_dict()
+        except Exception:
+            try:
+                csv_safe = row.to_dict()  # type: ignore[attr-defined]
+            except Exception:
+                csv_safe = {}
         return {
             "referencia": clean_value(base_ref),
             "producto": product_data,
             "variantes": variants_data,
+            "csv": csv_safe,
+            "exists": exists,
+            "action": ("update" if exists else "create"),
+            "store_url": store_url,
+            "admin_url": admin_url,
         }
     except Exception as e:
         return JSONResponse({"error": f"Error preparando preview: {e}"}, status_code=500)
@@ -993,11 +1053,30 @@ def job_status(job_id: str, tail: int = 200):
     job = job_manager.get(job_id)
     if not job:
         return JSONResponse({"error": "Trabajo no encontrado"}, status_code=404)
+    # Calcular métricas derivadas
+    percent = None
+    if getattr(job, "total", 0):
+        try:
+            percent = (job.completed / job.total) * 100.0
+        except Exception:
+            percent = None
+    elapsed = None
+    try:
+        if job.started_at:
+            import time as _t
+            elapsed = _t.time() - job.started_at
+    except Exception:
+        elapsed = None
     return {
         "job_id": job.id,
         "status": job.status,
         "error": job.error_message,
         "logs": job.get_logs(tail=tail),
+        "total": getattr(job, "total", 0),
+        "processed": getattr(job, "completed", 0),
+        "percent": percent,
+        "eta_seconds": getattr(job, "eta_seconds", None),
+        "elapsed_seconds": elapsed,
     }
 
 
@@ -1056,6 +1135,116 @@ def export_database():
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# =====================
+# Backfill de handles
+# =====================
+
+def _run_backfill_handles_job(job: Job):
+    job.status = "running"
+    job.started_at = time.time()
+    job.append_log("Iniciando backfill de handles de Shopify...\n")
+    # Preparar conexión a BD
+    try:
+        cnx = mysql.connector.connect(
+            host=MYSQL_CONFIG.get("host"),
+            user=MYSQL_CONFIG.get("user"),
+            password=MYSQL_CONFIG.get("password"),
+            database=MYSQL_CONFIG.get("database"),
+            port=MYSQL_CONFIG.get("port", 3306),
+        )
+        cur = cnx.cursor(dictionary=True)
+    except Exception as e:
+        job.status = "error"
+        job.error_message = f"Error conectando a MySQL: {e}"
+        job.append_log(job.error_message + "\n")
+        return
+
+    # Contar pendientes
+    cur.execute(
+        "SELECT COUNT(*) AS cnt FROM product_mappings WHERE (shopify_handle IS NULL OR shopify_handle='') AND shopify_product_id IS NOT NULL"
+    )
+    total = int(cur.fetchone()["cnt"])
+    job.append_log(f"Pendientes de completar handle: {total}\n")
+    job.set_progress(0, total, None)
+
+    # Configurar API Shopify
+    try:
+        main_mod = importlib.import_module("main")
+        if not main_mod.setup_shopify_api():
+            raise RuntimeError("No se pudo establecer conexión con Shopify. Revisa .env")
+    except Exception as e:
+        job.status = "error"
+        job.error_message = f"Error configurando API Shopify: {e}"
+        job.append_log(job.error_message + "\n")
+        cur.close(); cnx.close()
+        return
+
+    import shopify  # type: ignore
+    processed = 0
+    batch = 0
+    try:
+        cur.execute(
+            "SELECT internal_reference, shopify_product_id FROM product_mappings WHERE (shopify_handle IS NULL OR shopify_handle='') AND shopify_product_id IS NOT NULL ORDER BY id ASC"
+        )
+        rows = cur.fetchall() or []
+        for row in rows:
+            ref = str(row["internal_reference"]).strip()
+            pid = int(row["shopify_product_id"]) if row["shopify_product_id"] else None
+            if not pid:
+                continue
+            try:
+                prod = shopify.Product.find(pid)
+                handle = getattr(prod, "handle", None)
+                if handle:
+                    up = cnx.cursor()
+                    up.execute(
+                        "UPDATE product_mappings SET shopify_handle=%s, last_updated_at=CURRENT_TIMESTAMP WHERE internal_reference=%s",
+                        (handle, ref),
+                    )
+                    cnx.commit()
+                    up.close()
+                    processed += 1
+                    batch += 1
+                    job.append_log(f"{ref}: handle='{handle}' ✔\n")
+                else:
+                    job.append_log(f"{ref}: producto sin handle en Shopify (ID {pid})\n")
+            except Exception as e:
+                job.append_log(f"{ref}: error obteniendo producto {pid} -> {e}\n")
+            # Respetar límites
+            time.sleep(0.2)
+            # Actualizar progreso + ETA periódicamente
+            if batch >= 25:
+                try:
+                    elapsed = (time.time() - job.started_at) if job.started_at else None
+                    rate = (processed / elapsed) if elapsed and elapsed > 0 else None
+                    remaining = (total - processed)
+                    eta = (remaining / rate) if rate else None
+                except Exception:
+                    eta = None
+                job.set_progress(processed, total, eta)
+                job.append_log(f"Progreso: {processed}/{total} ({(processed/total*100 if total else 0):.1f}%)\n")
+                batch = 0
+        job.append_log(f"Backfill finalizado. Completados: {processed} de {total}.\n")
+        job.status = "done"
+    except Exception as e:
+        job.status = "error"
+        job.error_message = str(e)
+        job.append_log(f"ERROR backfill: {e}\n")
+    finally:
+        try:
+            cur.close(); cnx.close()
+        except Exception:
+            pass
+
+
+@app.post("/db/backfill_handles")
+def backfill_handles_start():
+    job = job_manager.create(filename="backfill-handles")
+    thread = threading.Thread(target=_run_backfill_handles_job, args=(job,), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
 
 
 # =====================

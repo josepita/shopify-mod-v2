@@ -1,33 +1,50 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h3>Base de datos</h3>
-  <p class="muted">Importa un volcado SQL o exporta el esquema y datos actuales.</p>
+<div class="card p-3 mb-3">
+  <h3 class="h5">Base de datos</h3>
+  <p class="text-muted">Importa/exporta la BD y lanza tareas de mantenimiento.</p>
   {% if error %}
-    <p class="error">{{ error }}</p>
+    <div class="alert alert-danger mt-2">{{ error }}</div>
   {% endif %}
   {% if success %}
-    <p style="color:#065f46;">{{ success }}</p>
+    <div class="alert alert-success mt-2">{{ success }}</div>
   {% endif %}
-</div>
-
-<div class="card">
-  <h4>Importar desde archivo .sql</h4>
-  <form action="/db/import" method="post" enctype="multipart/form-data">
-    <div style="margin-bottom:12px;">
-      <label for="dump">Archivo SQL</label>
-      <input type="file" id="dump" name="file" accept=".sql" required>
+  <div class="row g-3 mt-1">
+    <div class="col-md-6">
+      <div class="border rounded p-3 h-100">
+        <h4 class="h6">Importar desde archivo .sql</h4>
+        <form action="/db/import" method="post" enctype="multipart/form-data" class="mt-2">
+          <div class="mb-2">
+            <label for="dump">Archivo SQL</label>
+            <input class="form-control" type="file" id="dump" name="file" accept=".sql" required>
+          </div>
+          <button class="btn btn-primary" type="submit">Importar</button>
+          <div class="form-text mt-1">Requiere .env con credenciales MySQL correctas.</div>
+        </form>
+      </div>
     </div>
-    <button class="btn btn-primary" type="submit">Importar</button>
-    <p class="muted" style="margin-top:8px;">Requiere .env con credenciales MySQL correctas.</p>
-  </form>
+    <div class="col-md-6">
+      <div class="border rounded p-3 h-100 d-flex flex-column">
+        <h4 class="h6">Exportar base de datos</h4>
+        <div class="mt-2">
+          <a class="btn btn-outline-primary" href="/db/export">Descargar dump SQL</a>
+        </div>
+        <div class="text-muted mt-2">Genera un archivo con estructura y datos.</div>
+        <div class="text-muted">Alternativa CLI: <code>python scripts/export_db.py</code></div>
+      </div>
+    </div>
+  </div>
 </div>
 
-<div class="card">
-  <h4>Exportar base de datos</h4>
-  <a class="btn" href="/db/export">Descargar dump SQL</a>
-  <p class="muted" style="margin-top:8px;">Genera un archivo con estructura y datos.</p>
-  <p class="muted">Alternativa CLI: <code>python scripts/export_db.py</code></p>
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h4 class="h6 m-0">Backfill de handles de Shopify</h4>
+    <form action="/db/backfill_handles" method="post" class="m-0">
+      <button class="btn btn-primary" type="submit">Iniciar backfill</button>
+    </form>
+  </div>
+  <div class="text-muted mt-2">Completa <code>shopify_handle</code> en <code>product_mappings</code> para registros sin handle. Es reanudable y ejecuta en segundo plano (ver vista de trabajos para el progreso).</div>
+  <div class="text-muted">Requiere credenciales Shopify y MySQL válidas.</div>
+  <div class="text-muted">Alternativa CLI: <code>python scripts/backfill_handles.py</code></div>
 </div>
 {% endblock %}
-

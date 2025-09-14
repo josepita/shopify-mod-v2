@@ -104,6 +104,23 @@ def prepare_product_data(base_row: pd.Series, base_reference: str) -> Dict:
     metafields.update(measures)
     metafields.update(shapes)
 
+    # Precio seguro (evitar NaN)
+    try:
+        base_price = float(str(base_row.get("PRECIO", 0)).replace(",", "."))
+        if pd.isna(base_price):
+            base_price = 0.0
+    except Exception:
+        base_price = 0.0
+
+    # Stock seguro (evitar NaN)
+    try:
+        raw_stock = base_row.get("STOCK", 0)
+        stock_int = int(float(str(raw_stock).replace(",", ".")))
+        if pd.isna(stock_int):
+            stock_int = 0
+    except Exception:
+        stock_int = 0
+
     return {
         "title": format_title(base_reference, base_row["DESCRIPCION"]),
         "body_html": description,
@@ -115,8 +132,8 @@ def prepare_product_data(base_row: pd.Series, base_reference: str) -> Dict:
             base_row.get("TIPO", ""),
         ),
         "sku": base_reference,
-        "price": round(float(base_row["PRECIO"]) * 2.2, 2),
-        "stock": int(base_row["STOCK"]),
+        "price": round(base_price * 2.2, 2),
+        "stock": stock_int,
         "weight": clean_value(base_row.get("PESO G.", 0)),
         "cost": clean_value(base_row["PRECIO"]),
         "metafields": metafields,
@@ -140,16 +157,32 @@ def prepare_variants_data(variants_rows: List[pd.Series]) -> List[Dict]:
         except Exception:
             weight = 0.0
 
+        # Precio variante seguro
+        try:
+            v_base_price = float(str(row.get("PRECIO", 0)).replace(",", "."))
+            if pd.isna(v_base_price):
+                v_base_price = 0.0
+        except Exception:
+            v_base_price = 0.0
+
+        # Stock variante seguro
+        try:
+            v_raw_stock = row.get("STOCK", 0)
+            v_stock_int = int(float(str(v_raw_stock).replace(",", ".")))
+            if pd.isna(v_stock_int):
+                v_stock_int = 0
+        except Exception:
+            v_stock_int = 0
+
         variants_data.append(
             {
                 "size": size,
-                "price": round(float(row["PRECIO"]) * 2.2, 2),
+                "price": round(v_base_price * 2.2, 2),
                 "sku": variant_reference,
-                "stock": int(row["STOCK"]),
+                "stock": v_stock_int,
                 "weight": weight,
                 "cost": clean_value(row["PRECIO"]),
             }
         )
 
     return variants_data
-

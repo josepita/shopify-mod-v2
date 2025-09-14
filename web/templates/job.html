@@ -1,19 +1,41 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h3>Trabajo: {{ job_id }}</h3>
-  <p>Estado: <span id="status">{{ status }}</span></p>
-  <div>
-    <pre id="logBox">Cargando logs...</pre>
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h3 class="h5 m-0">Trabajo: <code>{{ job_id }}</code></h3>
+    <a class="btn btn-sm btn-outline-secondary" href="/">Inicio</a>
   </div>
-  <div style="margin-top:8px;">
-    <a class="btn" href="/">Ir al inicio</a>
+  <div class="text-muted">Estado: <span id="status">{{ status }}</span></div>
+  <div class="mt-2">
+    <div class="d-flex justify-content-between small mb-1">
+      <div><span id="progressLabel">—</span></div>
+      <div>ETA: <span id="eta">—</span> · Elapsed: <span id="elapsed">—</span></div>
+    </div>
+    <div class="progress" role="progressbar" aria-label="Progreso" aria-valuemin="0" aria-valuemax="100">
+      <div id="bar" class="progress-bar" style="width: 0%">0%</div>
+    </div>
   </div>
+</div>
+
+<div class="card p-3">
+  <div class="text-muted mb-2">Logs</div>
+  <pre id="logBox" class="mb-0">Cargando logs...</pre>
 </div>
 
 <script>
   const statusEl = document.getElementById('status');
   const logBox = document.getElementById('logBox');
+  const bar = document.getElementById('bar');
+  const label = document.getElementById('progressLabel');
+  const etaEl = document.getElementById('eta');
+  const elapsedEl = document.getElementById('elapsed');
+
+  function fmtDuration(sec) {
+    if (sec == null) return '—';
+    const s = Math.max(0, Math.floor(sec));
+    const m = Math.floor(s / 60); const r = s % 60;
+    return `${m}:${String(r).padStart(2,'0')}`;
+  }
 
   async function poll() {
     try {
@@ -21,6 +43,16 @@
       if (!res.ok) return;
       const data = await res.json();
       statusEl.textContent = data.status;
+      const pct = (data.percent != null) ? Math.max(0, Math.min(100, data.percent)) : null;
+      if (pct != null) {
+        bar.style.width = pct.toFixed(1) + '%';
+        bar.textContent = pct.toFixed(1) + '%';
+      }
+      if (data.total != null) {
+        label.textContent = `${data.processed ?? 0} / ${data.total}`;
+      }
+      etaEl.textContent = fmtDuration(data.eta_seconds);
+      elapsedEl.textContent = fmtDuration(data.elapsed_seconds);
       const text = (data.logs || []).join('\n');
       logBox.textContent = text || '(sin logs todavía)';
       if (data.error) {
@@ -36,4 +68,3 @@
   poll();
 </script>
 {% endblock %}
-

@@ -17,6 +17,10 @@ class Job:
         self.finished_at: Optional[float] = None
         self._logs: List[str] = []
         self._lock = threading.Lock()
+        # Progreso opcional
+        self.total: int = 0
+        self.completed: int = 0
+        self.eta_seconds: Optional[float] = None
 
     def append_log(self, text: str) -> None:
         if not text:
@@ -35,6 +39,12 @@ class Job:
     def get_logs(self, tail: int = 200) -> List[str]:
         with self._lock:
             return self._logs[-tail:]
+
+    def set_progress(self, completed: int, total: int, eta_seconds: Optional[float] = None) -> None:
+        with self._lock:
+            self.completed = max(0, int(completed))
+            self.total = max(0, int(total))
+            self.eta_seconds = float(eta_seconds) if eta_seconds is not None else None
 
 
 class JobManager:
@@ -61,4 +71,3 @@ class JobManager:
 
 # Instancia global sencilla
 job_manager = JobManager()
-

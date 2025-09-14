@@ -202,7 +202,32 @@
   <input type="hidden" name="categoria" value="{{ categoria }}">
   <input type="hidden" name="subcategoria" value="{{ subcategoria }}">
   <input type="hidden" name="estado" value="{{ estado }}">
-  <table class="table table-striped table-sm align-middle table-fixed">
+  {% set qparams = 'q=' ~ q ~ '&categoria=' ~ categoria ~ '&subcategoria=' ~ subcategoria ~ '&estado=' ~ estado ~ '&per_page=' ~ (per_page or 50) %}
+  <!-- Controles superiores: acciones seleccionadas y paginación -->
+  <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2">
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <button class="btn btn-outline-secondary" type="submit">Exportar seleccionados</button>
+      <a class="btn btn-outline-secondary" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar filtrado</a>
+      <button class="btn btn-primary" type="button" onclick="uploadSelected()">Subir seleccionados</button>
+      <div class="form-check ms-2">
+        <input class="form-check-input" type="checkbox" id="reconcile" checked>
+        <label class="form-check-label" for="reconcile">Reconciliar por SKU antes de subir</label>
+      </div>
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+      <div class="text-muted small">Página {{ page }} de {{ pages }}</div>
+      {% if page > 1 %}
+        <a class="btn btn-sm btn-outline-secondary" href="/catalog?{{ qparams }}&page=1">« Primera</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ page - 1 }}">‹ Anterior</a>
+      {% endif %}
+      {% if page < pages %}
+        <a class="btn btn-sm btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ page + 1 }}">Siguiente ›</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ pages }}">Última »</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="table-responsive">
+  <table class="table table-striped table-sm align-middle">
     <thead>
       <tr>
         <th style="width:36px;"><input class="form-check-input" type="checkbox" id="chkAll" onclick="toggleAll(this)"></th>
@@ -241,33 +266,20 @@
           <td>{% if r.estado=='subido' %}<span class="badge text-bg-success">Subido</span>{% else %}<span class="badge text-bg-warning text-dark">Pendiente</span>{% endif %}</td>
           <td>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-ref="{{ r.referencia }}" onclick="showPreview(this)">Ver datos Shopify</button>
+            {% if r.estado=='subido' and r.store_url %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ r.store_url }}" target="_blank" rel="noopener">Ver en tienda</a>
+            {% endif %}
+            {% if r.estado=='subido' and r.admin_url %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ r.admin_url }}" target="_blank" rel="noopener">Admin</a>
+            {% endif %}
           </td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
-  <div class="d-flex gap-2">
-    <button class="btn btn-outline-secondary" type="submit">Exportar seleccionados</button>
-    <a class="btn btn-outline-secondary" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar filtrado</a>
-    <button class="btn btn-primary" type="button" onclick="uploadSelected()">Subir seleccionados</button>
-    <div class="form-check ms-2">
-      <input class="form-check-input" type="checkbox" id="reconcile" checked>
-      <label class="form-check-label" for="reconcile">Reconciliar por SKU antes de subir</label>
-    </div>
   </div>
   </form>
   <form id="uploadSelectedForm" action="/catalog/upload_selected" method="post" style="display:none;"></form>
-  <div class="d-flex gap-2 mt-2">
-    {% set qparams = 'q=' ~ q ~ '&categoria=' ~ categoria ~ '&subcategoria=' ~ subcategoria ~ '&estado=' ~ estado ~ '&per_page=' ~ (per_page or 50) %}
-    {% if page > 1 %}
-      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page=1">« Primera</a>
-      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ page - 1 }}">‹ Anterior</a>
-    {% endif %}
-    {% if page < pages %}
-      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ page + 1 }}">Siguiente ›</a>
-      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ pages }}">Última »</a>
-    {% endif %}
-  </div>
 </div>
 
 <div class="card p-3 mb-3">
@@ -328,6 +340,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+        <button type="button" class="btn btn-primary" id="previewActionBtn" onclick="void(0)">Acción</button>
       </div>
     </div>
   </div>
@@ -338,20 +351,30 @@
     const ref = btn.getAttribute('data-ref');
     const modalEl = document.getElementById('previewModal');
     const content = document.getElementById('previewContent');
+    const actionBtn = document.getElementById('previewActionBtn');
     content.innerHTML = 'Cargando…';
+    actionBtn.disabled = true;
+    actionBtn.textContent = '…';
+    actionBtn.onclick = null;
     const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     modal.show();
     try {
       const res = await fetch(`/catalog/preview/${encodeURIComponent(ref)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error');
-      content.innerHTML = renderPreview(data);
+      content.innerHTML = renderPreviewV2(data);
+      const label = data.exists ? 'Actualizar' : 'Crear';
+      actionBtn.textContent = label;
+      actionBtn.onclick = () => uploadOne(data.referencia);
+      actionBtn.disabled = false;
     } catch (e) {
       content.innerHTML = `<div class="text-danger">${e.message}</div>`;
+      actionBtn.textContent = 'Acción';
+      actionBtn.disabled = true;
     }
   }
 
-  function renderPreview(data) {
+  function renderPreviewV2(data) {
     const p = data.producto || {};
     const imgs = (p.images || []).map(img => `<img src="${img.src}" alt="img" class="me-2 mb-2" style="max-height:100px; border:1px solid #eee; border-radius:4px;">`).join('');
     const metas = p.metafields ? Object.entries(p.metafields).filter(([k,v]) => v).map(([k,v]) => `<li><strong>${k}:</strong> ${v}</li>`).join('') : '';
@@ -360,8 +383,19 @@
         SKU: ${v.sku} — Talla: ${v.size} — Precio: ${v.price} — Stock: ${v.stock} — Peso: ${v.weight} g
       </li>
     `).join('');
+    const csv = data.csv || {};
+    const csvFields = ['REFERENCIA','DESCRIPCION','PRECIO','STOCK','CATEGORIA','SUBCATEGORIA','METAL','COLOR ORO','TIPO','PESO G.'].filter(k => csv[k] !== undefined);
+    const csvHtml = csvFields.length ? `<ul>${csvFields.map(k => `<li><strong>${k}:</strong> ${csv[k] ?? ''}</li>`).join('')}</ul>` : '<div class="text-muted">No hay datos CSV.</div>';
+    const linksHtml = (data.store_url || data.admin_url) ? `
+      <div class="mb-2">
+        ${data.store_url ? `<a class="btn btn-sm btn-outline-primary me-2" href="${data.store_url}" target="_blank" rel="noopener">Ver en tienda</a>` : ''}
+        ${data.admin_url ? `<a class="btn btn-sm btn-outline-secondary" href="${data.admin_url}" target="_blank" rel="noopener">Abrir en admin</a>` : ''}
+      </div>` : '';
     return `
       <div class="mb-2"><strong>Referencia:</strong> ${data.referencia || ''}</div>
+      <div class="mb-2"><strong>Acción:</strong> ${data.exists ? 'Actualizar' : 'Crear'}</div>
+      ${linksHtml}
+      <div class="mb-2"><strong>Datos en CSV</strong>${csvHtml}</div>
       <div class="mb-2"><strong>Título:</strong> ${p.title || ''}</div>
       <div class="mb-2"><strong>SKU:</strong> ${p.sku || ''}</div>
       <div class="mb-2"><strong>Tipo:</strong> ${p.product_type || ''}</div>
@@ -371,6 +405,14 @@
       ${imgs ? `<div class="mb-2"><strong>Imágenes</strong><div class="d-flex flex-wrap">${imgs}</div></div>` : ''}
       ${variants ? `<div class="mb-2"><strong>Variantes</strong><ul>${variants}</ul></div>` : ''}
     `;
+  }
+
+  function uploadOne(ref) {
+    const form = document.getElementById('uploadSelectedForm');
+    form.innerHTML = '';
+    const i = document.createElement('input'); i.type='hidden'; i.name='selected'; i.value=ref; form.appendChild(i);
+    const rec = document.createElement('input'); rec.type='hidden'; rec.name='reconcile'; rec.value='true'; form.appendChild(rec);
+    form.submit();
   }
 
   function toggleAll(master) {
