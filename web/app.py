@@ -226,7 +226,8 @@ def catalog(
     categoria: str = Query(""),
     subcategoria: str = Query(""),
     estado: str = Query("todos"),
-    n: int = Query(200),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=1000),
 ):
     df = _load_catalog_df()
     context = {"request": request, "has_data": df is not None}
@@ -239,9 +240,17 @@ def catalog(
         context.update({"error": f"Error preparando catálogo: {e}"})
         return templates.TemplateResponse("catalog.html", context, status_code=500)
 
+    total = len(records)
+    pages = max(1, (total + per_page - 1) // per_page)
+    if page > pages:
+        page = pages
+    start = (page - 1) * per_page
+    end = start + per_page
+    records_page = records[start:end]
+
     context.update(
         {
-            "records": records[: max(1, n)],
+            "records": records_page,
             "metrics": metrics,
             "categorias": categorias,
             "subcategorias": subcategorias,
@@ -249,7 +258,10 @@ def catalog(
             "categoria": categoria,
             "subcategoria": subcategoria,
             "estado": estado,
-            "n": n,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "pages": pages,
         }
     )
     return templates.TemplateResponse("catalog.html", context)

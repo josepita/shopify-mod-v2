@@ -63,8 +63,8 @@
       </select>
     </div>
     <div>
-      <label for="n">Mostrar</label>
-      <input type="number" id="n" name="n" min="1" value="{{ n }}" style="width:100px;">
+      <label for="per_page">Por página</label>
+      <input type="number" id="per_page" name="per_page" min="1" max="1000" value="{{ per_page or 50 }}" style="width:120px;">
     </div>
     <div>
       <button class="btn" type="submit">Aplicar</button>
@@ -75,6 +75,7 @@
 
 <div class="card">
   <h4>Resultados</h4>
+  <div class="muted" style="margin-bottom:8px;">Mostrando página {{ page }} de {{ pages }} — {{ total }} resultados</div>
   <table>
     <thead>
       <tr>
@@ -105,7 +106,17 @@
       {% endfor %}
     </tbody>
   </table>
+  <div style="display:flex; gap:8px; margin-top:12px;">
+    {% set qparams = 'q=' ~ q ~ '&categoria=' ~ categoria ~ '&subcategoria=' ~ subcategoria ~ '&estado=' ~ estado ~ '&per_page=' ~ (per_page or 50) %}
+    {% if page > 1 %}
+      <a class="btn" href="/catalog?{{ qparams }}&page=1">« Primera</a>
+      <a class="btn" href="/catalog?{{ qparams }}&page={{ page - 1 }}">‹ Anterior</a>
+    {% endif %}
+    {% if page < pages %}
+      <a class="btn" href="/catalog?{{ qparams }}&page={{ page + 1 }}">Siguiente ›</a>
+      <a class="btn" href="/catalog?{{ qparams }}&page={{ pages }}">Última »</a>
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 {% endblock %}
-
