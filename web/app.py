@@ -384,7 +384,15 @@ def catalog_export(
         output.seek(0)
         output.truncate(0)
         for _, row in df_sel.iterrows():
-            writer.writerow([row.get(c, "") for c in cols])
+            values = []
+            for c in cols:
+                v = row.get(c, "")
+                # Evitar escribir NaN/None/Null: convertir a cadena vacía
+                if pd.isna(v) or v is None:
+                    values.append("")
+                else:
+                    values.append(str(v))
+            writer.writerow(values)
             yield output.getvalue()
             output.seek(0)
             output.truncate(0)
