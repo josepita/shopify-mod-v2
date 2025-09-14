@@ -2,6 +2,11 @@
 {% block content %}
 <div class="card p-3 mb-3">
   <h3 class="h5">Catálogo desde CSV</h3>
+  {% if msg == 'fetch_ok' %}
+    <div class="alert alert-success mt-2">Catálogo descargado y almacenado correctamente.</div>
+  {% elif msg == 'upload_ok' %}
+    <div class="alert alert-success mt-2">Catálogo cargado y almacenado correctamente.</div>
+  {% endif %}
   {% if not has_data %}
     <p class="text-muted">Sube un CSV/XLS(X) para analizar qué productos están subidos a Shopify.</p>
   {% endif %}
@@ -36,6 +41,16 @@
       </form>
     </div>
   </div>
+
+  {% if last_catalog %}
+  <div class="mt-3 text-muted">
+    <strong>Último catálogo:</strong>
+    <span class="ms-2">Archivo: {{ last_catalog.path }}</span>
+    <span class="ms-2">Filas: {{ last_catalog.rows }}</span>
+    <span class="ms-2">Tamaño: {{ last_catalog.size_human }}</span>
+    <span class="ms-2">Guardado: {{ last_catalog.saved_at }}</span>
+  </div>
+  {% endif %}
 </div>
 
 {% if has_data %}

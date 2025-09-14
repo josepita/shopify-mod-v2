@@ -37,6 +37,7 @@ UPLOAD_DIR = BASE_DIR / "web" / "uploads"
 TEMPLATES_DIR = BASE_DIR / "web" / "templates"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CATALOG_FILE = UPLOAD_DIR / "catalog-current"
+CATALOG_META = UPLOAD_DIR / "catalog-info.json"
 ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
@@ -227,6 +228,22 @@ def _archive_and_snapshot_df(df, original_filename: str) -> None:
         pass
 
 
+def _save_catalog_metadata(df, dest: Path, source: str) -> None:
+    try:
+        import json
+        stats = dest.stat() if dest.exists() else None
+        info = {
+            "source": source,
+            "path": str(dest.name),
+            "saved_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": int(len(df)) if df is not None else None,
+            "size_bytes": int(stats.st_size) if stats else None,
+        }
+        CATALOG_META.write_text(json.dumps(info), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _fetch_mappings_for_refs(refs: list[str]):
     if not refs:
         return set(), {}
@@ -388,13 +405,36 @@ def catalog(
     sort_dir: str = Query("asc"),  # asc|desc
 ):
     df = _load_catalog_df()
+    # Mensaje de feedback
+    msg = request.query_params.get('msg')
     context = {
         "request": request,
         "has_data": df is not None,
         "csv_url": CSV_URL,
         "csv_username": CSV_USERNAME,
         "csv_password": CSV_PASSWORD,
+        "msg": msg,
     }
+    # Cargar metadatos del último catálogo
+    try:
+        import json
+        if CATALOG_META.exists():
+            meta = json.loads(CATALOG_META.read_text(encoding="utf-8"))
+            # Tamaño legible
+            def _hs(n):
+                try:
+                    n = int(n)
+                    for unit in ['B','KB','MB','GB']:
+                        if n < 1024:
+                            return f"{n} {unit}"
+                        n //= 1024
+                    return f"{n} TB"
+                except Exception:
+                    return ""
+            meta["size_human"] = _hs(meta.get("size_bytes"))
+            context["last_catalog"] = meta
+    except Exception:
+        pass
     if df is None:
         return templates.TemplateResponse("catalog.html", context)
 
@@ -459,9 +499,10 @@ def catalog_upload(request: Request, file: UploadFile = File(...)):
         df = _load_dataframe_for_preview(dest)
         if df is not None:
             _archive_and_snapshot_df(df, filename)
+            _save_catalog_metadata(df, dest, source=f"upload:{filename}")
     except Exception:
         pass
-    return RedirectResponse(url="/catalog", status_code=303)
+    return RedirectResponse(url="/catalog?msg=upload_ok", status_code=303)
 
 
 @app.get("/catalog/export")
@@ -705,9 +746,10 @@ def catalog_fetch(request: Request, url: str = Form(...), username: str = Form("
     try:
         df.to_csv(dest, index=False)
         _archive_and_snapshot_df(df, os.path.basename(url))
+        _save_catalog_metadata(df, dest, source=f"fetch:{url}")
     except Exception:
         pass
-    return RedirectResponse(url="/catalog", status_code=303)
+    return RedirectResponse(url="/catalog?msg=fetch_ok", status_code=303)
 
 
 class _LogIO(io.TextIOBase):
