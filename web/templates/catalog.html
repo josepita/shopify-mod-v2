@@ -68,7 +68,10 @@
 
 {% if has_data %}
 <div class="card p-3 mb-3">
-  <h4 class="h6">Estadísticas</h4>
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h4 class="h6 m-0">Estadísticas</h4>
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#catStatsModal">Ver por categoría</button>
+  </div>
   <div class="row row-cols-2 row-cols-md-4 g-2">
     <div class="col"><div class="p-2 border rounded">Filas CSV: <strong>{{ metrics.total_rows }}</strong></div></div>
     <div class="col"><div class="p-2 border rounded">Productos base: <strong>{{ metrics.total_products }}</strong></div></div>
@@ -100,41 +103,52 @@
   {% endif %}
 </div>
 
-<div class="card p-3 mb-3">
-  <h4 class="h6">Estadísticas por categoría</h4>
-  {% if cat_stats and cat_stats|length > 0 %}
-  <div class="table-responsive">
-    <table class="table table-sm table-striped align-middle">
-      <thead>
-        <tr>
-          <th>Categoría</th>
-          <th>Productos</th>
-          <th>Subidos</th>
-          <th>Pendientes</th>
-          <th>Cobertura</th>
-          <th>Acciones</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for s in cat_stats %}
-        <tr>
-          <td>{{ s.categoria }}</td>
-          <td>{{ s.total }}</td>
-          <td>{{ s.subidos }}</td>
-          <td>{{ s.pendientes }}</td>
-          <td>{{ '%.2f'|format(s.cobertura) }}%</td>
-          <td>
-            <a class="btn btn-sm btn-outline-secondary" href="/catalog?categoria={{ s.categoria }}">Filtrar</a>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<!-- Modal: Estadísticas por categoría -->
+<div class="modal fade" id="catStatsModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Estadísticas por categoría</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body">
+        {% if cat_stats and cat_stats|length > 0 %}
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle">
+            <thead>
+              <tr>
+                <th>Categoría</th>
+                <th>Productos</th>
+                <th>Subidos</th>
+                <th>Pendientes</th>
+                <th>Cobertura</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in cat_stats %}
+              <tr>
+                <td>{{ s.categoria }}</td>
+                <td>{{ s.total }}</td>
+                <td>{{ s.subidos }}</td>
+                <td>{{ s.pendientes }}</td>
+                <td>{{ '%.2f'|format(s.cobertura) }}%</td>
+                <td><a class="btn btn-sm btn-outline-secondary" href="/catalog?categoria={{ s.categoria }}">Filtrar</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+          <div class="text-muted">Sin datos para calcular estadísticas.</div>
+        {% endif %}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
   </div>
-  {% else %}
-    <div class="text-muted">Sin datos para calcular estadísticas.</div>
-  {% endif %}
-</div>
+  </div>
 
 <div class="card p-3 mb-3">
   <h4 class="h6">Filtros</h4>
