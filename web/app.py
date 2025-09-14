@@ -77,16 +77,22 @@ def _load_dataframe_for_preview(path: Path) -> Optional[object]:
                         return df
                 except Exception:
                     continue
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            logging.error(f"Error archivando CSV normalizado: {e}")
+        except Exception:
+            pass
 
     # Excel xlsx
     try:
         df = pd.read_excel(path, engine="openpyxl")
         df.columns = df.columns.str.strip()
         return df
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            logging.error(f"Error guardando snapshot en BD: {e}")
+        except Exception:
+            pass
 
     # Excel xls
     try:
@@ -382,6 +388,57 @@ def _list_snapshot_stats(limit: int = 100):
         return out
     except Exception:
         return []
+
+
+def _list_archive_files(limit: int = 100):
+    """Lista archivos del directorio de archivos archivados con métricas rápidas.
+    Sirve de respaldo si la tabla de snapshots aún no existe o falló el volcado.
+    """
+    items = []
+    try:
+        import pandas as pd  # type: ignore
+    except Exception:
+        pd = None  # type: ignore
+    try:
+        files = sorted(
+            [p for p in ARCHIVE_DIR.glob('**/*.csv')],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:limit]
+        for p in files:
+            rows = 0
+            pct_zero_price = 0.0
+            pct_zero_stock = 0.0
+            if pd is not None:
+                try:
+                    df = pd.read_csv(p)
+                except Exception:
+                    try:
+                        df = pd.read_csv(p, sep=';')
+                    except Exception:
+                        df = None
+                if df is not None:
+                    rows = int(len(df))
+                    cols = [c.strip().upper() for c in df.columns]
+                    if 'PRECIO' in cols:
+                        z = df[df.iloc[:, cols.index('PRECIO')].fillna(0).astype(float) == 0]
+                        pct_zero_price = round((len(z) / rows) * 100, 2) if rows else 0.0
+                    if 'STOCK' in cols:
+                        z = df[df.iloc[:, cols.index('STOCK')].fillna(0).astype(float) == 0]
+                        pct_zero_stock = round((len(z) / rows) * 100, 2) if rows else 0.0
+            items.append(
+                {
+                    'path': str(p.relative_to(BASE_DIR)),
+                    'name': p.name,
+                    'modified': _dt.datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                    'rows': rows,
+                    'pct_zero_price': pct_zero_price,
+                    'pct_zero_stock': pct_zero_stock,
+                }
+            )
+    except Exception:
+        return []
+    return items
 
 
 def _load_snapshot_as_df(snapshot_date: str):
@@ -690,9 +747,10 @@ def db_tools(request: Request):
 @app.get("/catalog/archive", response_class=HTMLResponse)
 def catalog_archive(request: Request, limit: int = 50):
     snapshots = _list_snapshot_stats(limit=limit)
+    files = _list_archive_files(limit=limit)
     return templates.TemplateResponse(
         "archive.html",
-        {"request": request, "snapshots": snapshots, "limit": limit}
+        {"request": request, "snapshots": snapshots, "files": files, "limit": limit}
     )
 
 
@@ -1451,6 +1509,63 @@ def _run_backfill_handles_job(job: Job):
 def backfill_handles_start():
     job = job_manager.create(filename="backfill-handles")
     thread = threading.Thread(target=_run_backfill_handles_job, args=(job,), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+# =====================
+# Migraciones/Verificación esquema
+# =====================
+
+def _run_migrations_job(job: Job, mode: str = 'run'):
+    job.status = 'running'
+    job.started_at = time.time()
+    try:
+        import importlib
+        from db import migrations as mig
+        # Capturar prints de las funciones de migración
+        with redirect_stdout(_LogIO(job)), redirect_stderr(_LogIO(job)):
+            if mode == 'check':
+                print('Verificando compatibilidad del esquema...')
+                conn = mysql.connector.connect(
+                    host=MYSQL_CONFIG.get('host'),
+                    user=MYSQL_CONFIG.get('user'),
+                    password=MYSQL_CONFIG.get('password'),
+                    database=MYSQL_CONFIG.get('database'),
+                    port=MYSQL_CONFIG.get('port', 3306),
+                )
+                try:
+                    ok, issues = mig.check_schema_compatibility(conn)
+                finally:
+                    try: conn.close()
+                    except Exception: pass
+                if ok:
+                    print('✔ Esquema compatible con la aplicación')
+                else:
+                    print('⚠ Diferencias detectadas:')
+                    for i, issue in enumerate(issues, 1):
+                        print(f'  {i}. {issue}')
+            else:
+                mig.run_migrations()
+        job.status = 'done'
+    except Exception as e:
+        job.status = 'error'
+        job.error_message = str(e)
+        job.append_log(f'ERROR migraciones: {e}\n')
+
+
+@app.post('/db/migrations/run')
+def migrations_run_start():
+    job = job_manager.create(filename='migrations-run')
+    thread = threading.Thread(target=_run_migrations_job, args=(job,'run'), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+@app.post('/db/migrations/check')
+def migrations_check_start():
+    job = job_manager.create(filename='migrations-check')
+    thread = threading.Thread(target=_run_migrations_job, args=(job,'check'), daemon=True)
     thread.start()
     return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
 

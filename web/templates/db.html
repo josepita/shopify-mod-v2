@@ -47,4 +47,19 @@
   <div class="text-muted">Requiere credenciales Shopify y MySQL válidas.</div>
   <div class="text-muted">Alternativa CLI: <code>python scripts/backfill_handles.py</code></div>
 </div>
+
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <h4 class="h6 m-0">Migraciones y verificación de esquema</h4>
+    <div class="d-flex gap-2">
+      <form action="/db/migrations/check" method="post" class="m-0">
+        <button class="btn btn-outline-secondary" type="submit">Verificar esquema</button>
+      </form>
+      <form action="/db/migrations/run" method="post" class="m-0">
+        <button class="btn btn-primary" type="submit">Crear/actualizar tablas</button>
+      </form>
+    </div>
+  </div>
+  <div class="text-muted mt-2">La verificación no altera datos. “Crear/actualizar” crea tablas ausentes y aplica mejoras no destructivas (índices/columnas opcionales).</div>
+</div>
 {% endblock %}

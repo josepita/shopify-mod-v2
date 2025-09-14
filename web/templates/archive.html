@@ -34,5 +34,39 @@
     </table>
   </div>
 </div>
-{% endblock %}
 
+{% if files and files|length > 0 %}
+<div class="card p-3 mb-3">
+  <h4 class="h6">Archivos almacenados en disco</h4>
+  <div class="text-muted">Se muestran copias CSV guardadas en <code>data/csv_archive</code> como respaldo (si no hay snapshot de BD).</div>
+  <div class="table-responsive mt-2">
+    <table class="table table-sm table-striped align-middle">
+      <thead>
+        <tr>
+          <th>Nombre</th>
+          <th>Fecha</th>
+          <th>Artículos</th>
+          <th>% sin precio</th>
+          <th>% sin stock</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in files %}
+        <tr>
+          <td>{{ f.name }}</td>
+          <td>{{ f.modified }}</td>
+          <td>{{ f.rows }}</td>
+          <td>{{ f.pct_zero_price }}%</td>
+          <td>{{ f.pct_zero_stock }}%</td>
+          <td>
+            <a class="btn btn-sm btn-outline-secondary" href="/catalog/compare">Comparar</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
