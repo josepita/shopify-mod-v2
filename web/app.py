@@ -20,12 +20,16 @@ import mysql.connector  # type: ignore
 import datetime as _dt
 from pathlib import Path
 import importlib
+from fastapi import Query
+from fastapi.responses import StreamingResponse
+import csv
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "web" / "uploads"
 TEMPLATES_DIR = BASE_DIR / "web" / "templates"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+CATALOG_FILE = UPLOAD_DIR / "catalog-current"
 
 
 app = FastAPI(title="Shopify Sync UI", version="0.1.0")
@@ -78,6 +82,127 @@ def _load_dataframe_for_preview(path: Path) -> Optional[object]:
     return None
 
 
+def _load_catalog_df() -> Optional[object]:
+    for ext in (".csv", ".xlsx", ".xls"):
+        path = Path(str(CATALOG_FILE) + ext)
+        if path.exists():
+            return _load_dataframe_for_preview(path)
+    return None
+
+
+def _detect_catalog_path(filename: str) -> Path:
+    lower = filename.lower()
+    if lower.endswith(".csv"):
+        return Path(str(CATALOG_FILE) + ".csv")
+    if lower.endswith(".xlsx"):
+        return Path(str(CATALOG_FILE) + ".xlsx")
+    if lower.endswith(".xls"):
+        return Path(str(CATALOG_FILE) + ".xls")
+    return Path(str(CATALOG_FILE) + ".csv")
+
+
+def _fetch_mappings_for_refs(refs: list[str]):
+    if not refs:
+        return set(), {}
+    cnx = mysql.connector.connect(
+        host=MYSQL_CONFIG.get("host"),
+        user=MYSQL_CONFIG.get("user"),
+        password=MYSQL_CONFIG.get("password"),
+        database=MYSQL_CONFIG.get("database"),
+        port=MYSQL_CONFIG.get("port", 3306),
+    )
+    cur = cnx.cursor()
+    placeholders = ",".join(["%s"] * len(refs))
+    cur.execute(
+        f"SELECT internal_reference FROM product_mappings WHERE internal_reference IN ({placeholders})",
+        tuple(refs),
+    )
+    existing = {row[0] for row in cur.fetchall()}
+    cur.execute(
+        f"SELECT parent_reference, COUNT(*) FROM variant_mappings WHERE parent_reference IN ({placeholders}) GROUP BY parent_reference",
+        tuple(refs),
+    )
+    variant_counts = {row[0]: int(row[1]) for row in cur.fetchall()}
+    cur.close()
+    cnx.close()
+    return existing, variant_counts
+
+
+def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: str = "", estado: str = "todos"):
+    grouped = group_variants(df)
+    base_refs = [clean_value(ref) for ref in grouped.keys()]
+    existing_set, variant_counts_map = _fetch_mappings_for_refs(base_refs)
+
+    records = []
+    total_variants = 0
+    for base_ref, info in grouped.items():
+        row = info["base_data"]
+        base_ref = clean_value(base_ref)
+        descripcion = clean_value(row.get("DESCRIPCION", ""))
+        cat = clean_value(row.get("CATEGORIA", ""))
+        subcat = clean_value(row.get("SUBCATEGORIA", ""))
+        tipo = clean_value(row.get("TIPO", ""))
+        precio = clean_value(row.get("PRECIO", ""))
+        stock = clean_value(row.get("STOCK", ""))
+        vcount = len(info.get("variants", []))
+        total_variants += vcount
+        estado_item = "subido" if base_ref in existing_set else "pendiente"
+
+        rec = {
+            "referencia": base_ref,
+            "descripcion": descripcion,
+            "categoria": cat,
+            "subcategoria": subcat,
+            "tipo": tipo,
+            "precio": precio,
+            "stock": stock,
+            "variantes": vcount,
+            "variantes_subidas": variant_counts_map.get(base_ref, 0),
+            "estado": estado_item,
+        }
+        records.append(rec)
+
+    # Filtros
+    q_norm = q.strip().lower()
+    def match_q(r):
+        if not q_norm:
+            return True
+        return (
+            q_norm in r["referencia"].lower()
+            or q_norm in r["categoria"].lower()
+            or q_norm in r["subcategoria"].lower()
+            or q_norm in r["descripcion"].lower()
+        )
+
+    filtered = [r for r in records if match_q(r)]
+    if categoria:
+        filtered = [r for r in filtered if r["categoria"].lower() == categoria.strip().lower()]
+    if subcategoria:
+        filtered = [r for r in filtered if r["subcategoria"].lower() == subcategoria.strip().lower()]
+    if estado in ("subido", "pendiente"):
+        filtered = [r for r in filtered if r["estado"] == estado]
+
+    # Métricas
+    total_products = len(records)
+    subidos = sum(1 for r in records if r["estado"] == "subido")
+    pendientes = total_products - subidos
+    variants_subidas = sum(r["variantes_subidas"] for r in records)
+    metrics = {
+        "total_rows": int(len(df)),
+        "total_products": total_products,
+        "total_variants": total_variants,
+        "subidos": subidos,
+        "pendientes": pendientes,
+        "coverage": round(subidos / total_products * 100, 2) if total_products else 0.0,
+        "variants_subidas": variants_subidas,
+    }
+
+    categorias = sorted({r["categoria"] for r in records if r["categoria"]})
+    subcategorias = sorted({r["subcategoria"] for r in records if r["subcategoria"]})
+
+    return filtered, metrics, categorias, subcategorias
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
@@ -91,6 +216,105 @@ def db_tools(request: Request):
     return templates.TemplateResponse(
         "db.html",
         {"request": request}
+    )
+
+
+@app.get("/catalog", response_class=HTMLResponse)
+def catalog(
+    request: Request,
+    q: str = Query(""),
+    categoria: str = Query(""),
+    subcategoria: str = Query(""),
+    estado: str = Query("todos"),
+    n: int = Query(200),
+):
+    df = _load_catalog_df()
+    context = {"request": request, "has_data": df is not None}
+    if df is None:
+        return templates.TemplateResponse("catalog.html", context)
+
+    try:
+        records, metrics, categorias, subcategorias = _build_catalog_records(df, q, categoria, subcategoria, estado)
+    except Exception as e:
+        context.update({"error": f"Error preparando catálogo: {e}"})
+        return templates.TemplateResponse("catalog.html", context, status_code=500)
+
+    context.update(
+        {
+            "records": records[: max(1, n)],
+            "metrics": metrics,
+            "categorias": categorias,
+            "subcategorias": subcategorias,
+            "q": q,
+            "categoria": categoria,
+            "subcategoria": subcategoria,
+            "estado": estado,
+            "n": n,
+        }
+    )
+    return templates.TemplateResponse("catalog.html", context)
+
+
+@app.post("/catalog/upload", response_class=HTMLResponse)
+def catalog_upload(request: Request, file: UploadFile = File(...)):
+    filename = os.path.basename(file.filename)
+    dest = _detect_catalog_path(filename)
+    _save_upload(file, dest)
+    return RedirectResponse(url="/catalog", status_code=303)
+
+
+@app.get("/catalog/export")
+def catalog_export(
+    q: str = Query(""),
+    categoria: str = Query(""),
+    subcategoria: str = Query(""),
+    estado: str = Query("pendiente"),
+):
+    df = _load_catalog_df()
+    if df is None:
+        return JSONResponse({"error": "No hay catálogo cargado"}, status_code=400)
+    records, _, _, _ = _build_catalog_records(df, q, categoria, subcategoria, estado)
+
+    def _iter_rows():
+        header = [
+            "REFERENCIA",
+            "DESCRIPCION",
+            "CATEGORIA",
+            "SUBCATEGORIA",
+            "PRECIO",
+            "STOCK",
+            "VARIANTES",
+            "ESTADO",
+        ]
+        output = csv.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(header)
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+        for r in records:
+            writer.writerow(
+                [
+                    r["referencia"],
+                    r["descripcion"],
+                    r["categoria"],
+                    r["subcategoria"],
+                    r["precio"],
+                    r["stock"],
+                    r["variantes"],
+                    r["estado"],
+                ]
+            )
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+    ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"catalogo-{estado}-{ts}.csv"
+    return StreamingResponse(
+        _iter_rows(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 

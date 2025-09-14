@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Catálogo desde CSV</h3>
+  {% if not has_data %}
+    <p class="muted">Sube un CSV/XLS(X) para analizar qué productos están subidos a Shopify.</p>
+  {% endif %}
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  <form action="/catalog/upload" method="post" enctype="multipart/form-data" style="margin-top:8px;">
+    <label for="file">Archivo de productos (XLS/XLSX/CSV)</label>
+    <input type="file" id="file" name="file" required>
+    <button class="btn btn-primary" type="submit" style="margin-left:8px;">Cargar</button>
+  </form>
+</div>
+
+{% if has_data %}
+<div class="card">
+  <h4>Estadísticas</h4>
+  <div style="display:flex; gap:24px; flex-wrap:wrap;">
+    <div>Filas CSV: <strong>{{ metrics.total_rows }}</strong></div>
+    <div>Productos base: <strong>{{ metrics.total_products }}</strong></div>
+    <div>Variantes totales: <strong>{{ metrics.total_variants }}</strong></div>
+    <div>Subidos: <strong>{{ metrics.subidos }}</strong></div>
+    <div>Pendientes: <strong>{{ metrics.pendientes }}</strong></div>
+    <div>Cobertura: <strong>{{ metrics.coverage }}%</strong></div>
+    <div>Variantes subidas: <strong>{{ metrics.variants_subidas }}</strong></div>
+  </div>
+</div>
+
+<div class="card">
+  <h4>Filtros</h4>
+  <form action="/catalog" method="get" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label for="q">Buscar</label>
+      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Referencia, categoría, subcategoría...">
+    </div>
+    <div>
+      <label for="categoria">Categoría</label>
+      <select id="categoria" name="categoria">
+        <option value="">(Todas)</option>
+        {% for c in categorias %}
+          <option value="{{ c }}" {% if categoria==c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="subcategoria">Subcategoría</label>
+      <select id="subcategoria" name="subcategoria">
+        <option value="">(Todas)</option>
+        {% for sc in subcategorias %}
+          <option value="{{ sc }}" {% if subcategoria==sc %}selected{% endif %}>{{ sc }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="estado">Estado</label>
+      <select id="estado" name="estado">
+        <option value="todos" {% if estado=='todos' %}selected{% endif %}>Todos</option>
+        <option value="subido" {% if estado=='subido' %}selected{% endif %}>Subidos</option>
+        <option value="pendiente" {% if estado=='pendiente' %}selected{% endif %}>Pendientes</option>
+      </select>
+    </div>
+    <div>
+      <label for="n">Mostrar</label>
+      <input type="number" id="n" name="n" min="1" value="{{ n }}" style="width:100px;">
+    </div>
+    <div>
+      <button class="btn" type="submit">Aplicar</button>
+      <a class="btn" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar ({{ estado if estado!='todos' else 'pendiente' }})</a>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h4>Resultados</h4>
+  <table>
+    <thead>
+      <tr>
+        <th>Referencia</th>
+        <th>Descripción</th>
+        <th>Categoría</th>
+        <th>Subcategoría</th>
+        <th>Tipo</th>
+        <th>Precio</th>
+        <th>Stock</th>
+        <th>Variantes</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+        <tr>
+          <td>{{ r.referencia }}</td>
+          <td>{{ r.descripcion }}</td>
+          <td>{{ r.categoria }}</td>
+          <td>{{ r.subcategoria }}</td>
+          <td>{{ r.tipo }}</td>
+          <td>{{ r.precio }}</td>
+          <td>{{ r.stock }}</td>
+          <td>{{ r.variantes }}</td>
+          <td>{% if r.estado=='subido' %}✅ Subido{% else %}⏳ Pendiente{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
+
