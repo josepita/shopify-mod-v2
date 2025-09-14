@@ -884,3 +884,24 @@ def queues_process(request: Request, type: str = Form("all"), batch: int = Form(
     thread = threading.Thread(target=_run_queue_job, args=(job, type, batch), daemon=True)
     thread.start()
     return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+
+def _run_detect_job(job: Job, detect_type: str = "all", limit: int | None = None):
+    job.status = "running"
+    try:
+        job.append_log("Detectando cambios entre snapshots y poblando colas...\n")
+        stats = qm.queue_changes_from_snapshots(process_type=detect_type, limit=limit or None)
+        job.append_log(f"Cola de precios: +{stats['inserted_prices']}\n")
+        job.append_log(f"Cola de stock: +{stats['inserted_stock']}\n")
+        job.status = "done"
+    except Exception as e:
+        job.status = "error"
+        job.error_message = str(e)
+
+
+@app.post("/queues/detect")
+def queues_detect(request: Request, type: str = Form("all"), limit: int = Form(0)):
+    job = job_manager.create(filename=f"detect-{type}")
+    thread = threading.Thread(target=_run_detect_job, args=(job, type, (limit or None)), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)

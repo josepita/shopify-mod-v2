@@ -27,6 +27,25 @@
 </div>
 
 <div class="card p-3 mb-3">
+  <h4 class="h6">Detectar cambios y poblar colas</h4>
+  <form action="/queues/detect" method="post" class="d-flex gap-2 align-items-end">
+    <div>
+      <label for="dtype">Tipo</label>
+      <select class="form-select" id="dtype" name="type">
+        <option value="all">Todos</option>
+        <option value="prices">Solo precios</option>
+        <option value="stock">Solo stock</option>
+      </select>
+    </div>
+    <div>
+      <label for="limit">Límite (opcional)</label>
+      <input class="form-control" type="number" id="limit" name="limit" value="0" min="0" max="100000">
+    </div>
+    <button class="btn btn-outline-primary" type="submit">Detectar y llenar colas</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-3">
   <h4 class="h6">Pendientes de precio ({{ pending_prices|length }})</h4>
   <table class="table table-sm table-striped align-middle">
     <thead>
@@ -71,4 +90,3 @@
   </table>
 </div>
 {% endblock %}
-
