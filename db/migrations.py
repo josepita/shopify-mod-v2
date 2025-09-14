@@ -37,6 +37,7 @@ def create_tables(connection) -> None:
             parent_reference VARCHAR(255),
             size VARCHAR(50),
             price DECIMAL(10,2),
+            inventory_item_id BIGINT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY (parent_reference) 
@@ -56,6 +57,52 @@ def create_tables(connection) -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_internal_reference (internal_reference),
             INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        ,
+        """
+        CREATE TABLE IF NOT EXISTS price_updates_queue (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            variant_mapping_id INT,
+            new_price DECIMAL(10,2),
+            status ENUM('pending','processing','completed','error') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP NULL,
+            INDEX idx_status (status),
+            INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        ,
+        """
+        CREATE TABLE IF NOT EXISTS stock_updates_queue (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            variant_mapping_id INT,
+            new_stock INT,
+            status ENUM('pending','processing','completed','error') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP NULL,
+            INDEX idx_status (status),
+            INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        ,
+        """
+        CREATE TABLE IF NOT EXISTS price_history (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            reference VARCHAR(255) NOT NULL,
+            price DECIMAL(10,2) NOT NULL,
+            date DATE NOT NULL,
+            INDEX price_history_ref_date_idx (reference, date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+        ,
+        """
+        CREATE TABLE IF NOT EXISTS stock_history (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            reference VARCHAR(255) NOT NULL,
+            stock INT NOT NULL,
+            date DATE NOT NULL,
+            INDEX stock_history_ref_date_idx (reference, date)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
     ]
@@ -99,6 +146,7 @@ def _expected_schema() -> Dict[str, dict]:
                 "parent_reference": {"type": "varchar(255)"},
                 "size": {"type": "varchar(50)"},
                 "price": {"type": "decimal(10,2)"},
+                "inventory_item_id": {"type": "bigint"},
                 "created_at": {"type": "timestamp"},
                 "last_updated_at": {"type": "timestamp"},
             },
@@ -129,6 +177,60 @@ def _expected_schema() -> Dict[str, dict]:
             "indexes": [
                 {"name": "idx_internal_reference", "columns": ["internal_reference"]},
                 {"name": "idx_created_at", "columns": ["created_at"]},
+            ],
+        },
+        "price_updates_queue": {
+            "columns": {
+                "id": {"type": "int", "extra": "auto_increment"},
+                "variant_mapping_id": {"type": "int"},
+                "new_price": {"type": "decimal(10,2)"},
+                "status": {"type": "enum"},
+                "created_at": {"type": "timestamp"},
+                "processed_at": {"type": "timestamp"},
+            },
+            "primary_key": ["id"],
+            "indexes": [
+                {"name": "idx_status", "columns": ["status"]},
+                {"name": "idx_created_at", "columns": ["created_at"]},
+            ],
+        },
+        "stock_updates_queue": {
+            "columns": {
+                "id": {"type": "int", "extra": "auto_increment"},
+                "variant_mapping_id": {"type": "int"},
+                "new_stock": {"type": "int"},
+                "status": {"type": "enum"},
+                "created_at": {"type": "timestamp"},
+                "processed_at": {"type": "timestamp"},
+            },
+            "primary_key": ["id"],
+            "indexes": [
+                {"name": "idx_status", "columns": ["status"]},
+                {"name": "idx_created_at", "columns": ["created_at"]},
+            ],
+        },
+        "price_history": {
+            "columns": {
+                "id": {"type": "int", "extra": "auto_increment"},
+                "reference": {"type": "varchar(255)"},
+                "price": {"type": "decimal(10,2)"},
+                "date": {"type": "date"},
+            },
+            "primary_key": ["id"],
+            "indexes": [
+                {"name": "price_history_ref_date_idx", "columns": ["reference", "date"]},
+            ],
+        },
+        "stock_history": {
+            "columns": {
+                "id": {"type": "int", "extra": "auto_increment"},
+                "reference": {"type": "varchar(255)"},
+                "stock": {"type": "int"},
+                "date": {"type": "date"},
+            },
+            "primary_key": ["id"],
+            "indexes": [
+                {"name": "stock_history_ref_date_idx", "columns": ["reference", "date"]},
             ],
         },
     }
@@ -349,14 +451,79 @@ def apply_safe_upgrades(connection) -> List[str]:
             cursor.execute(create_idx_sql)
             executed.append(create_idx_sql)
 
-    # Comprobar índices en variant_mappings
+    # Comprobar índices y columnas en variant_mappings
     if "variant_mappings" in existing_tables:
+        # Columna inventory_item_id
+        cols_vm = _fetch_columns(cursor, "variant_mappings")
+        if "inventory_item_id" not in cols_vm:
+            alter_vm = "ALTER TABLE variant_mappings ADD COLUMN inventory_item_id BIGINT NULL AFTER price"
+            cursor.execute(alter_vm)
+            executed.append(alter_vm)
+
         idx_vm = _fetch_indexes(cursor, "variant_mappings")
         idx_cols_vm = {tuple(v) for v in idx_vm.values()}
         if ("shopify_variant_id",) not in idx_cols_vm:
             create_idx_sql = "CREATE INDEX idx_shopify_variant_id ON variant_mappings (shopify_variant_id)"
             cursor.execute(create_idx_sql)
             executed.append(create_idx_sql)
+
+    # Asegurar tablas de colas e históricos
+    required_tables_sql = {
+        "price_updates_queue": (
+            """
+            CREATE TABLE IF NOT EXISTS price_updates_queue (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                variant_mapping_id INT,
+                new_price DECIMAL(10,2),
+                status ENUM('pending','processing','completed','error') DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP NULL,
+                INDEX idx_status (status),
+                INDEX idx_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        ),
+        "stock_updates_queue": (
+            """
+            CREATE TABLE IF NOT EXISTS stock_updates_queue (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                variant_mapping_id INT,
+                new_stock INT,
+                status ENUM('pending','processing','completed','error') DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP NULL,
+                INDEX idx_status (status),
+                INDEX idx_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        ),
+        "price_history": (
+            """
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                reference VARCHAR(255) NOT NULL,
+                price DECIMAL(10,2) NOT NULL,
+                date DATE NOT NULL,
+                INDEX price_history_ref_date_idx (reference, date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        ),
+        "stock_history": (
+            """
+            CREATE TABLE IF NOT EXISTS stock_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                reference VARCHAR(255) NOT NULL,
+                stock INT NOT NULL,
+                date DATE NOT NULL,
+                INDEX stock_history_ref_date_idx (reference, date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """
+        ),
+    }
+    for tname, sql in required_tables_sql.items():
+        if tname not in existing_tables:
+            cursor.execute(sql)
+            executed.append(f"CREATE TABLE {tname}")
 
     connection.commit()
     return executed
