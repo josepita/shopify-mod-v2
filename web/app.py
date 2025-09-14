@@ -357,7 +357,7 @@ def _list_snapshot_stats(limit: int = 100):
             database=MYSQL_CONFIG.get("database"),
             port=MYSQL_CONFIG.get("port", 3306),
         )
-        cur = cnx.cursor()
+        cur = cnx.cursor(dictionary=True)
         cur.execute(
             """
             SELECT snapshot_date,
@@ -372,13 +372,14 @@ def _list_snapshot_stats(limit: int = 100):
             (limit,),
         )
         out = []
-        for sd, rows, zp, zs in cur.fetchall():
-            rows = int(rows or 0)
-            zp = int(zp or 0)
-            zs = int(zs or 0)
+        for row in cur.fetchall():
+            sd = row.get('snapshot_date')
+            rows = int(row.get('rows') or 0)
+            zp = int(row.get('zero_price') or 0)
+            zs = int(row.get('zero_stock') or 0)
             out.append(
                 {
-                    "snapshot_date": sd.strftime("%Y-%m-%d %H:%M:%S") if sd else "",
+                    "snapshot_date": (sd.strftime("%Y-%m-%d %H:%M:%S") if hasattr(sd, 'strftime') else str(sd) if sd else ""),
                     "rows": rows,
                     "pct_zero_price": round((zp / rows) * 100, 2) if rows else 0.0,
                     "pct_zero_stock": round((zs / rows) * 100, 2) if rows else 0.0,
