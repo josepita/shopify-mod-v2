@@ -372,7 +372,8 @@ def _list_snapshot_stats(limit: int = 100):
             (limit,),
         )
         out = []
-        for row in cur.fetchall():
+        rows_db = cur.fetchall()
+        for row in rows_db:
             sd = row.get('snapshot_date')
             rows = int(row.get('rows') or 0)
             zp = int(row.get('zero_price') or 0)
@@ -385,6 +386,28 @@ def _list_snapshot_stats(limit: int = 100):
                     "pct_zero_stock": round((zs / rows) * 100, 2) if rows else 0.0,
                 }
             )
+        # Fallback: si no hay filas (o por SQL mode), intentar DISTINCT y calcular por snapshot
+        if not out:
+            cur.execute(
+                "SELECT DISTINCT snapshot_date FROM catalog_snapshots ORDER BY snapshot_date DESC LIMIT %s",
+                (limit,),
+            )
+            dates = [r["snapshot_date"] if isinstance(r, dict) else r[0] for r in cur.fetchall()]
+            for sd in dates:
+                cur.execute(
+                    "SELECT COUNT(*), SUM(CASE WHEN precio IS NULL OR precio=0 THEN 1 ELSE 0 END), SUM(CASE WHEN stock IS NULL OR stock=0 THEN 1 ELSE 0 END) FROM catalog_snapshots WHERE snapshot_date=%s",
+                    (sd,),
+                )
+                c_rows, c_zp, c_zs = cur.fetchone()
+                c_rows = int(c_rows or 0); c_zp = int(c_zp or 0); c_zs = int(c_zs or 0)
+                out.append(
+                    {
+                        "snapshot_date": (sd.strftime("%Y-%m-%d %H:%M:%S") if hasattr(sd, 'strftime') else str(sd) if sd else ""),
+                        "rows": c_rows,
+                        "pct_zero_price": round((c_zp / c_rows) * 100, 2) if c_rows else 0.0,
+                        "pct_zero_stock": round((c_zs / c_rows) * 100, 2) if c_rows else 0.0,
+                    }
+                )
         cur.close(); cnx.close()
         return out
     except Exception:
@@ -759,9 +782,10 @@ def catalog_archive(request: Request, limit: int = 50):
 def catalog_compare(request: Request, a: str = "", b: str = ""):
     """Pantalla para comparar catálogos subidos o snapshots archivados."""
     snaps = _list_snapshot_stats(limit=100)
+    files = _list_archive_files(limit=200)
     return templates.TemplateResponse(
         "compare.html",
-        {"request": request, "snapshots": snaps, "a": a, "b": b}
+        {"request": request, "snapshots": snaps, "files": files, "a": a, "b": b}
     )
 
 
@@ -808,7 +832,7 @@ def _run_compare_job(job: Job, mode: str, params: dict):
 
 
 @app.post('/catalog/compare/run', response_class=HTMLResponse)
-def catalog_compare_run(request: Request, mode: str = Form(...), csv1: UploadFile | None = File(None), csv2: UploadFile | None = File(None), snap1: str = Form(""), snap2: str = Form("")):
+def catalog_compare_run(request: Request, mode: str = Form(...), csv1: UploadFile | None = File(None), csv2: UploadFile | None = File(None), snap1: str = Form(""), snap2: str = Form(""), file1: str = Form(""), file2: str = Form("")):
     job = job_manager.create(filename='compare-catalogs')
     if mode == 'upload':
         if not csv1 or not csv2:
@@ -817,6 +841,13 @@ def catalog_compare_run(request: Request, mode: str = Form(...), csv1: UploadFil
         p2 = UPLOAD_DIR / f"{job.id}-B-{os.path.basename(csv2.filename)}"
         _save_upload(csv1, p1)
         _save_upload(csv2, p2)
+        params = { 'path1': p1, 'path2': p2 }
+    elif mode == 'files':
+        try:
+            p1 = BASE_DIR / file1
+            p2 = BASE_DIR / file2
+        except Exception:
+            return RedirectResponse(url=f"/catalog/compare?msg=falta_archivo", status_code=303)
         params = { 'path1': p1, 'path2': p2 }
     else:
         if not snap1 or not snap2:

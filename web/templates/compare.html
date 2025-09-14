@@ -53,5 +53,32 @@
     </div>
   </div>
 </div>
-{% endblock %}
 
+<div class="card p-3 mb-3">
+  <h4 class="h6">Comparar archivos archivados en disco</h4>
+  <form action="/catalog/compare/run" method="post" class="row g-3 align-items-end">
+    <input type="hidden" name="mode" value="files">
+    <div class="col-md-5">
+      <label for="file1">Archivo A</label>
+      <select class="form-select" id="file1" name="file1" required>
+        <option value="" disabled selected>Selecciona…</option>
+        {% for f in files %}
+          <option value="{{ f.path }}">{{ f.name }} ({{ f.modified }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-5">
+      <label for="file2">Archivo B</label>
+      <select class="form-select" id="file2" name="file2" required>
+        <option value="" disabled selected>Selecciona…</option>
+        {% for f in files %}
+          <option value="{{ f.path }}">{{ f.name }} ({{ f.modified }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-outline-primary w-100" type="submit">Comparar</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
