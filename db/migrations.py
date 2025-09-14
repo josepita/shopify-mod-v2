@@ -105,6 +105,26 @@ def create_tables(connection) -> None:
             INDEX stock_history_ref_date_idx (reference, date)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
+        ,
+        """
+        CREATE TABLE IF NOT EXISTS catalog_snapshots (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            snapshot_date DATETIME NOT NULL,
+            reference VARCHAR(255) NOT NULL,
+            base_reference VARCHAR(255) NOT NULL,
+            descripcion VARCHAR(512) NULL,
+            precio DECIMAL(10,2) NULL,
+            stock INT NULL,
+            categoria VARCHAR(255) NULL,
+            subcategoria VARCHAR(255) NULL,
+            tipo VARCHAR(255) NULL,
+            imagen1 VARCHAR(1024) NULL,
+            INDEX idx_snapshot_date (snapshot_date),
+            INDEX idx_reference (reference),
+            INDEX idx_base_reference (base_reference),
+            INDEX idx_cat_subcat (categoria, subcategoria)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
     ]
     
     for table_sql in tables:

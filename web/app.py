@@ -34,6 +34,8 @@ UPLOAD_DIR = BASE_DIR / "web" / "uploads"
 TEMPLATES_DIR = BASE_DIR / "web" / "templates"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CATALOG_FILE = UPLOAD_DIR / "catalog-current"
+ARCHIVE_DIR = BASE_DIR / "data" / "csv_archive"
+ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 app = FastAPI(title="Shopify Sync UI", version="0.1.0")
@@ -103,6 +105,74 @@ def _detect_catalog_path(filename: str) -> Path:
     if lower.endswith(".xls"):
         return Path(str(CATALOG_FILE) + ".xls")
     return Path(str(CATALOG_FILE) + ".csv")
+
+
+def _archive_and_snapshot_df(df, original_filename: str) -> None:
+    ts = _dt.datetime.now()
+    # Archivar CSV normalizado
+    try:
+        day_dir = ARCHIVE_DIR / ts.strftime("%Y%m%d")
+        day_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = os.path.splitext(os.path.basename(original_filename))[0]
+        out_path = day_dir / f"{safe_name}-{ts.strftime('%H%M%S')}.csv"
+        df.to_csv(out_path, index=False)
+    except Exception:
+        pass
+
+    # Volcar snapshot a BD
+    try:
+        cnx = mysql.connector.connect(
+            host=MYSQL_CONFIG.get("host"),
+            user=MYSQL_CONFIG.get("user"),
+            password=MYSQL_CONFIG.get("password"),
+            database=MYSQL_CONFIG.get("database"),
+            port=MYSQL_CONFIG.get("port", 3306),
+        )
+        cur = cnx.cursor()
+        cols = df.columns.str.strip().tolist()
+        def gv(row, key, default=""):
+            return str(row.get(key, default)) if key in row else default
+        rows = []
+        for _, r in df.iterrows():
+            ref = str(r.get("REFERENCIA", "")).strip()
+            if not ref:
+                continue
+            base_ref = get_base_reference(ref)
+            try:
+                precio = float(str(r.get("PRECIO", "0")).replace(",", ".")) if "PRECIO" in cols else None
+            except Exception:
+                precio = None
+            try:
+                stock = int(float(str(r.get("STOCK", "0")).replace(",", "."))) if "STOCK" in cols else None
+            except Exception:
+                stock = None
+            rows.append(
+                (
+                    ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    ref,
+                    base_ref,
+                    gv(r, "DESCRIPCION"),
+                    precio,
+                    stock,
+                    gv(r, "CATEGORIA"),
+                    gv(r, "SUBCATEGORIA"),
+                    gv(r, "TIPO"),
+                    gv(r, "IMAGEN 1"),
+                )
+            )
+        if rows:
+            cur.executemany(
+                """
+                INSERT INTO catalog_snapshots
+                (snapshot_date, reference, base_reference, descripcion, precio, stock, categoria, subcategoria, tipo, imagen1)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                rows,
+            )
+            cnx.commit()
+        cur.close(); cnx.close()
+    except Exception:
+        pass
 
 
 def _fetch_mappings_for_refs(refs: list[str]):
@@ -326,6 +396,13 @@ def catalog_upload(request: Request, file: UploadFile = File(...)):
     filename = os.path.basename(file.filename)
     dest = _detect_catalog_path(filename)
     _save_upload(file, dest)
+    # Archivar y snapshot si es legible
+    try:
+        df = _load_dataframe_for_preview(dest)
+        if df is not None:
+            _archive_and_snapshot_df(df, filename)
+    except Exception:
+        pass
     return RedirectResponse(url="/catalog", status_code=303)
 
 
@@ -406,6 +483,77 @@ def catalog_export(
     ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = f"catalogo-seleccion-{ts}.csv"
     return StreamingResponse(_iter_rows(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+def _latest_snapshot_date(cur) -> Optional[str]:
+    cur.execute("SELECT MAX(snapshot_date) FROM catalog_snapshots")
+    row = cur.fetchone()
+    return row[0].strftime("%Y-%m-%d %H:%M:%S") if row and row[0] else None
+
+
+@app.get("/catalog/discontinued")
+def catalog_discontinued(days: int = 3, categoria: str = "", subcategoria: str = ""):
+    try:
+        cnx = mysql.connector.connect(
+            host=MYSQL_CONFIG.get("host"),
+            user=MYSQL_CONFIG.get("user"),
+            password=MYSQL_CONFIG.get("password"),
+            database=MYSQL_CONFIG.get("database"),
+            port=MYSQL_CONFIG.get("port", 3306),
+        )
+        cur = cnx.cursor()
+        latest = _latest_snapshot_date(cur)
+        if not latest:
+            return {"items": [], "count": 0}
+        params = []
+        where_cat = ""
+        if categoria:
+            where_cat += " AND categoria = %s"; params.append(categoria)
+        if subcategoria:
+            where_cat += " AND subcategoria = %s"; params.append(subcategoria)
+        # Conjunto actual
+        cur.execute(
+            f"SELECT DISTINCT base_reference FROM catalog_snapshots WHERE snapshot_date = %s {where_cat}",
+            tuple([latest] + params),
+        )
+        current_bases = {r[0] for r in cur.fetchall()}
+        # Conjunto previo (últimos N días)
+        cur.execute(
+            f"""
+            SELECT DISTINCT base_reference FROM catalog_snapshots
+            WHERE snapshot_date < %s AND snapshot_date >= DATE_SUB(%s, INTERVAL %s DAY) {where_cat}
+            """,
+            tuple([latest, latest, int(days)] + params),
+        )
+        prior_bases = {r[0] for r in cur.fetchall()}
+        missing = sorted(list(prior_bases - current_bases))
+        items = []
+        if missing:
+            placeholders = ",".join(["%s"] * len(missing))
+            cur.execute(
+                f"""
+                SELECT s.base_reference, s.descripcion, s.categoria, s.subcategoria, s.tipo, s.imagen1, MAX(s.snapshot_date)
+                FROM catalog_snapshots s
+                WHERE s.base_reference IN ({placeholders})
+                GROUP BY s.base_reference, s.descripcion, s.categoria, s.subcategoria, s.tipo, s.imagen1
+                ORDER BY s.base_reference
+                """,
+                tuple(missing),
+            )
+            for r in cur.fetchall():
+                items.append({
+                    "base_reference": r[0],
+                    "descripcion": r[1],
+                    "categoria": r[2],
+                    "subcategoria": r[3],
+                    "tipo": r[4],
+                    "imagen1": r[5],
+                    "last_seen": r[6].strftime("%Y-%m-%d %H:%M:%S") if r[6] else "",
+                })
+        cur.close(); cnx.close()
+        return {"items": items, "count": len(items), "latest": latest}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/preview", response_class=HTMLResponse)
