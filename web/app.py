@@ -352,6 +352,29 @@ def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: s
     return filtered, metrics, categorias, subcategorias
 
 
+def _compute_category_stats(records: list[dict]) -> list[dict]:
+    """Calcula estadísticas por categoría a partir de la lista de registros."""
+    stats: dict[str, dict] = {}
+    for r in records:
+        cat = r.get("categoria") or "(Sin categoría)"
+        st = stats.setdefault(cat, {"categoria": cat, "total": 0, "subidos": 0, "pendientes": 0})
+        st["total"] += 1
+        if r.get("estado") == "subido":
+            st["subidos"] += 1
+        else:
+            st["pendientes"] += 1
+    # Calcular cobertura y ordenar por nombre
+    out: list[dict] = []
+    for cat, st in stats.items():
+        total = st["total"] or 1
+        cobertura = round(st["subidos"] / total * 100, 2)
+        st["cobertura"] = cobertura
+        out.append(st)
+    # Orden por pendientes desc, luego categoría
+    out.sort(key=lambda x: (-x["pendientes"], x["categoria"]))
+    return out
+
+
 @app.get("/catalog/preview/{base_ref}")
 def catalog_preview(base_ref: str):
     df = _load_catalog_df()
@@ -469,6 +492,9 @@ def catalog(
     end = start + per_page
     records_page = records[start:end]
 
+    # Estadísticas por categoría (del catálogo completo, no del paginado)
+    cat_stats = _compute_category_stats(records)
+
     context.update(
         {
             "records": records_page,
@@ -486,6 +512,7 @@ def catalog(
             "sort_by": sort_by,
             "sort_dir": sort_dir,
             "validation": validation,
+            "cat_stats": cat_stats,
         }
     )
     return templates.TemplateResponse("catalog.html", context)

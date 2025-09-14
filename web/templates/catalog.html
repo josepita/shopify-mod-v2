@@ -101,6 +101,42 @@
 </div>
 
 <div class="card p-3 mb-3">
+  <h4 class="h6">Estadísticas por categoría</h4>
+  {% if cat_stats and cat_stats|length > 0 %}
+  <div class="table-responsive">
+    <table class="table table-sm table-striped align-middle">
+      <thead>
+        <tr>
+          <th>Categoría</th>
+          <th>Productos</th>
+          <th>Subidos</th>
+          <th>Pendientes</th>
+          <th>Cobertura</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in cat_stats %}
+        <tr>
+          <td>{{ s.categoria }}</td>
+          <td>{{ s.total }}</td>
+          <td>{{ s.subidos }}</td>
+          <td>{{ s.pendientes }}</td>
+          <td>{{ '%.2f'|format(s.cobertura) }}%</td>
+          <td>
+            <a class="btn btn-sm btn-outline-secondary" href="/catalog?categoria={{ s.categoria }}">Filtrar</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="text-muted">Sin datos para calcular estadísticas.</div>
+  {% endif %}
+</div>
+
+<div class="card p-3 mb-3">
   <h4 class="h6">Filtros</h4>
   <form action="/catalog" method="get" class="d-flex gap-3 flex-wrap align-items-end">
     <div>
