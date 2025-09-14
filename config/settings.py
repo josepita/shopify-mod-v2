@@ -7,8 +7,10 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Cargar variables de entorno desde .env
-load_dotenv()
+# Cargar variables de entorno desde .env en la raíz del proyecto, independientemente del cwd
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+dotenv_path = PROJECT_ROOT / '.env'
+load_dotenv(dotenv_path)
 
 # Configuración MySQL
 MYSQL_CONFIG = {
