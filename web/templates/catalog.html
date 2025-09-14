@@ -78,25 +78,33 @@
 <div class="card p-3 mb-3">
   <h4 class="h6">Resultados</h4>
   <div class="text-muted mb-2">Mostrando página {{ page }} de {{ pages }} — {{ total }} resultados</div>
+  <form action="/catalog/export" method="get">
+  <input type="hidden" name="q" value="{{ q }}">
+  <input type="hidden" name="categoria" value="{{ categoria }}">
+  <input type="hidden" name="subcategoria" value="{{ subcategoria }}">
+  <input type="hidden" name="estado" value="{{ estado }}">
   <table class="table table-striped table-sm align-middle table-fixed">
     <thead>
       <tr>
+        <th style="width:36px;"><input class="form-check-input" type="checkbox" id="chkAll" onclick="toggleAll(this)"></th>
+        {% set dirflip = 'desc' if sort_dir=='asc' else 'asc' %}
         <th style="width:90px;">Imagen</th>
-        <th>Referencia</th>
-        <th>Descripción</th>
-        <th>Categoría</th>
-        <th>Subcategoría</th>
-        <th>Tipo</th>
-        <th>Precio</th>
-        <th>Stock</th>
-        <th>Variantes</th>
-        <th>Estado</th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=referencia&sort_dir={{ dirflip if sort_by=='referencia' else 'asc' }}">Referencia</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=descripcion&sort_dir={{ dirflip if sort_by=='descripcion' else 'asc' }}">Descripción</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=categoria&sort_dir={{ dirflip if sort_by=='categoria' else 'asc' }}">Categoría</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=subcategoria&sort_dir={{ dirflip if sort_by=='subcategoria' else 'asc' }}">Subcategoría</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=tipo&sort_dir={{ dirflip if sort_by=='tipo' else 'asc' }}">Tipo</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=precio&sort_dir={{ dirflip if sort_by=='precio' else 'asc' }}">Precio</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=stock&sort_dir={{ dirflip if sort_by=='stock' else 'asc' }}">Stock</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=variantes&sort_dir={{ dirflip if sort_by=='variantes' else 'asc' }}">Variantes</a></th>
+        <th><a href="/catalog?q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}&estado={{ estado }}&per_page={{ per_page }}&sort_by=estado&sort_dir={{ dirflip if sort_by=='estado' else 'asc' }}">Estado</a></th>
         <th>Acciones</th>
       </tr>
     </thead>
     <tbody>
       {% for r in records %}
         <tr>
+          <td><input class="form-check-input" type="checkbox" name="selected" value="{{ r.referencia }}"></td>
           <td>
             {% if r.imagen_url %}
               {% set imgsrc = r.imagen_url if r.imagen_url.startswith('http') else 'https://' ~ r.imagen_url %}
@@ -119,6 +127,11 @@
       {% endfor %}
     </tbody>
   </table>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-secondary" type="submit">Exportar seleccionados</button>
+    <a class="btn btn-outline-secondary" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar filtrado</a>
+  </div>
+  </form>
   <div class="d-flex gap-2 mt-2">
     {% set qparams = 'q=' ~ q ~ '&categoria=' ~ categoria ~ '&subcategoria=' ~ subcategoria ~ '&estado=' ~ estado ~ '&per_page=' ~ (per_page or 50) %}
     {% if page > 1 %}
@@ -188,6 +201,10 @@
       ${imgs ? `<div class="mb-2"><strong>Imágenes</strong><div class="d-flex flex-wrap">${imgs}</div></div>` : ''}
       ${variants ? `<div class="mb-2"><strong>Variantes</strong><ul>${variants}</ul></div>` : ''}
     `;
+  }
+
+  function toggleAll(master) {
+    document.querySelectorAll('input[name="selected"]').forEach(ch => ch.checked = master.checked);
   }
 </script>
 

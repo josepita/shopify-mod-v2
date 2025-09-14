@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .job_manager import job_manager, Job
-from utils.helpers import group_variants, clean_value
+from utils.helpers import group_variants, clean_value, get_base_reference
 from utils.prepare import prepare_product_data, prepare_variants_data
 from config.settings import MYSQL_CONFIG
 import mysql.connector  # type: ignore
@@ -258,6 +258,8 @@ def catalog(
     estado: str = Query("todos"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=1000),
+    sort_by: str = Query("referencia"),
+    sort_dir: str = Query("asc"),  # asc|desc
 ):
     df = _load_catalog_df()
     context = {"request": request, "has_data": df is not None}
@@ -269,6 +271,20 @@ def catalog(
     except Exception as e:
         context.update({"error": f"Error preparando catálogo: {e}"})
         return templates.TemplateResponse("catalog.html", context, status_code=500)
+
+    # Ordenación
+    sort_by = (sort_by or "").lower()
+    sort_dir = (sort_dir or "asc").lower()
+    reverse = sort_dir == "desc"
+    def sort_key(r):
+        if sort_by in ("precio", "stock", "variantes"):
+            try:
+                return float(str(r.get(sort_by, 0)).replace(",", "."))
+            except Exception:
+                return 0.0
+        return str(r.get(sort_by, "")).lower()
+    if sort_by:
+        records.sort(key=sort_key, reverse=reverse)
 
     total = len(records)
     pages = max(1, (total + per_page - 1) // per_page)
@@ -292,6 +308,8 @@ def catalog(
             "per_page": per_page,
             "total": total,
             "pages": pages,
+            "sort_by": sort_by,
+            "sort_dir": sort_dir,
         }
     )
     return templates.TemplateResponse("catalog.html", context)
@@ -311,57 +329,69 @@ def catalog_export(
     categoria: str = Query(""),
     subcategoria: str = Query(""),
     estado: str = Query("pendiente"),
+    selected: list[str] | None = Query(None),
 ):
     df = _load_catalog_df()
     if df is None:
         return JSONResponse({"error": "No hay catálogo cargado"}, status_code=400)
-    records, _, _, _ = _build_catalog_records(df, q, categoria, subcategoria, estado)
+    # Determinar referencias base a exportar
+    filtered_records, _, _, _ = _build_catalog_records(df, q, categoria, subcategoria, estado)
+    if selected:
+        base_refs = {clean_value(s) for s in selected}
+    else:
+        base_refs = {r["referencia"] for r in filtered_records}
 
+    # Filtrar filas del CSV original cuyo base_reference esté en base_refs
+    try:
+        import pandas as pd  # type: ignore
+    except Exception as e:
+        return JSONResponse({"error": f"Dependencia pandas ausente: {e}"}, status_code=500)
+
+    def in_selection(val: str) -> bool:
+        return clean_value(get_base_reference(clean_value(str(val)))) in base_refs
+
+    df_sel = df[df["REFERENCIA"].apply(in_selection)] if "REFERENCIA" in df.columns else df
+
+    # Orden de columnas solicitado
+    columns_order = [
+        "REFERENCIA",
+        "DESCRIPCION",
+        "PRECIO",
+        "STOCK",
+        "CATEGORIA",
+        "SUBCATEGORIA",
+        "METAL",
+        "COLOR ORO",
+        "TIPO",
+        "PESO G.",
+        "PIEDRA",
+        "CALIDAD PIEDRA",
+        "MEDIDAS",
+        "CIERRE",
+        "TALLA",
+        "GENERO",
+        "IMAGEN 1",
+        "IMAGEN 2",
+        "IMAGEN 3",
+    ]
+    cols = [c for c in columns_order if c in df_sel.columns]
+    # Stream CSV manteniendo orden de columnas
     def _iter_rows():
-        header = [
-            "IMAGEN_URL",
-            "REFERENCIA",
-            "DESCRIPCION",
-            "CATEGORIA",
-            "SUBCATEGORIA",
-            "TIPO",
-            "PRECIO",
-            "STOCK",
-            "VARIANTES",
-            "ESTADO",
-        ]
         output = csv.StringIO()
         writer = csv.writer(output)
-        writer.writerow(header)
+        writer.writerow(cols)
         yield output.getvalue()
         output.seek(0)
         output.truncate(0)
-        for r in records:
-            writer.writerow(
-                [
-                    r.get("imagen_url", ""),
-                    r["referencia"],
-                    r["descripcion"],
-                    r["categoria"],
-                    r["subcategoria"],
-                    r.get("tipo", ""),
-                    r["precio"],
-                    r["stock"],
-                    r["variantes"],
-                    r["estado"],
-                ]
-            )
+        for _, row in df_sel.iterrows():
+            writer.writerow([row.get(c, "") for c in cols])
             yield output.getvalue()
             output.seek(0)
             output.truncate(0)
 
     ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = f"catalogo-{estado}-{ts}.csv"
-    return StreamingResponse(
-        _iter_rows(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
+    filename = f"catalogo-seleccion-{ts}.csv"
+    return StreamingResponse(_iter_rows(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 @app.post("/preview", response_class=HTMLResponse)
