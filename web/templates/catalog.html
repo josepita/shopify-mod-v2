@@ -197,7 +197,7 @@
 <div class="card p-3 mb-3">
   <h4 class="h6">Resultados</h4>
   <div class="text-muted mb-2">Mostrando página {{ page }} de {{ pages }} — {{ total }} resultados</div>
-  <form action="/catalog/export" method="get">
+  <form action="/catalog/export" method="get" id="selectExportForm">
   <input type="hidden" name="q" value="{{ q }}">
   <input type="hidden" name="categoria" value="{{ categoria }}">
   <input type="hidden" name="subcategoria" value="{{ subcategoria }}">
@@ -249,8 +249,14 @@
   <div class="d-flex gap-2">
     <button class="btn btn-outline-secondary" type="submit">Exportar seleccionados</button>
     <a class="btn btn-outline-secondary" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar filtrado</a>
+    <button class="btn btn-primary" type="button" onclick="uploadSelected()">Subir seleccionados</button>
+    <div class="form-check ms-2">
+      <input class="form-check-input" type="checkbox" id="reconcile" checked>
+      <label class="form-check-label" for="reconcile">Reconciliar por SKU antes de subir</label>
+    </div>
   </div>
   </form>
+  <form id="uploadSelectedForm" action="/catalog/upload_selected" method="post" style="display:none;"></form>
   <div class="d-flex gap-2 mt-2">
     {% set qparams = 'q=' ~ q ~ '&categoria=' ~ categoria ~ '&subcategoria=' ~ subcategoria ~ '&estado=' ~ estado ~ '&per_page=' ~ (per_page or 50) %}
     {% if page > 1 %}
@@ -369,6 +375,21 @@
 
   function toggleAll(master) {
     document.querySelectorAll('input[name="selected"]').forEach(ch => ch.checked = master.checked);
+  }
+
+  function uploadSelected() {
+    const sel = Array.from(document.querySelectorAll('input[name="selected"]:checked')).map(el => el.value);
+    if (sel.length === 0) { alert('Selecciona al menos un producto.'); return; }
+    const form = document.getElementById('uploadSelectedForm');
+    form.innerHTML = '';
+    sel.forEach(v => {
+      const i = document.createElement('input');
+      i.type = 'hidden'; i.name = 'selected'; i.value = v; form.appendChild(i);
+    });
+    const rec = document.createElement('input');
+    rec.type = 'hidden'; rec.name = 'reconcile'; rec.value = document.getElementById('reconcile').checked ? 'true' : 'false';
+    form.appendChild(rec);
+    form.submit();
   }
 
   async function loadDiscontinued() {

@@ -143,6 +143,98 @@ def _fetch_remote_catalog(url: str, username: str = "", password: str = "") -> O
     return None
 
 
+def _filter_df_by_base_refs(df, base_refs: list[str]):
+    try:
+        import pandas as pd  # type: ignore
+        base_set = {clean_value(x) for x in base_refs}
+        if 'REFERENCIA' not in df.columns:
+            return None
+        tmp = df.copy()
+        tmp['__BASE__'] = tmp['REFERENCIA'].apply(lambda v: get_base_reference(clean_value(v)))
+        sub = tmp[tmp['__BASE__'].isin(base_set)].drop(columns=['__BASE__'])
+        return sub
+    except Exception:
+        return None
+
+
+def _reconcile_mappings_for_df(df_sub, job: Job):
+    """Crea mapeos mínimos por SKU si faltan, consultando GraphQL por variante.
+    Solo rellena product_mappings.shopify_product_id y variant_mappings básicos.
+    """
+    try:
+        from db.product_mapper import ProductMapper
+    except Exception:
+        return
+    mapper = ProductMapper(MYSQL_CONFIG)
+    gql = ShopifyGraphQL()
+    try:
+        refs = df_sub['REFERENCIA'].dropna().astype(str).tolist()
+    except Exception:
+        return
+    for sku in refs:
+        sku = clean_value(sku)
+        base = get_base_reference(sku)
+        try:
+            vm = mapper.get_variant_mapping(sku)
+            if vm:
+                continue
+        except Exception:
+            pass
+        info = gql.get_variant_info_by_sku(sku)
+        if not info or not info.get('variant_id') or not info.get('product_id'):
+            continue
+        pid = int(info['product_id'])
+        vid = int(info['variant_id'])
+        try:
+            mapper.execute_query(
+                """
+                INSERT INTO product_mappings (internal_reference, shopify_product_id)
+                VALUES (%s,%s)
+                ON DUPLICATE KEY UPDATE shopify_product_id=VALUES(shopify_product_id), last_updated_at=CURRENT_TIMESTAMP
+                """,
+                (base, pid),
+            )
+            mapper.execute_query(
+                """
+                INSERT INTO variant_mappings (internal_sku, shopify_variant_id, shopify_product_id, parent_reference)
+                VALUES (%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE shopify_variant_id=VALUES(shopify_variant_id), shopify_product_id=VALUES(shopify_product_id), last_updated_at=CURRENT_TIMESTAMP
+                """,
+                (sku, vid, pid, base),
+            )
+            job.append_log(f"Reconciliado mapping para {sku} (P:{pid} V:{vid})\n")
+        except Exception as e:
+            job.append_log(f"No se pudo reconciliar {sku}: {e}\n")
+
+
+def _run_upload_selected_job(job: Job, base_refs: list[str], reconcile: bool, batch_limit: int = 0):
+    job.status = 'running'
+    try:
+        df = _load_catalog_df()
+        if df is None:
+            raise RuntimeError('No hay catálogo cargado')
+        df_sub = _filter_df_by_base_refs(df, base_refs)
+        if df_sub is None or len(df_sub) == 0:
+            raise RuntimeError('No se encontraron filas para las referencias seleccionadas')
+        job.append_log(f"Filtradas {len(df_sub)} filas para {len(set(base_refs))} productos base\n")
+        if reconcile:
+            job.append_log("Reconciliando mapeos por SKU antes de subir…\n")
+            _reconcile_mappings_for_df(df_sub, job)
+        # Importar main y configurar API
+        import importlib
+        main_mod = importlib.import_module('main')
+        if not main_mod.setup_shopify_api():
+            raise RuntimeError('No se pudo conectar con Shopify (revisa .env)')
+        # Procesar subset con logs redirigidos
+        with redirect_stdout(_LogIO(job)), redirect_stderr(_LogIO(job)):
+            main_mod.process_products(df=df_sub, display_mode=False)
+        job.status = 'done'
+    except Exception as e:
+        job.status = 'error'
+        job.error_message = str(e)
+        job.append_log(f"ERROR: {e}")
+
+
 def _load_catalog_df() -> Optional[object]:
     for ext in (".csv", ".xlsx", ".xls"):
         path = Path(str(CATALOG_FILE) + ext)
@@ -532,6 +624,16 @@ def catalog_upload(request: Request, file: UploadFile = File(...)):
     except Exception:
         pass
     return RedirectResponse(url="/catalog?msg=upload_ok", status_code=303)
+
+
+@app.post('/catalog/upload_selected')
+def catalog_upload_selected(request: Request, selected: list[str] = Form(...), reconcile: bool = Form(True)):
+    if not selected:
+        return RedirectResponse(url='/catalog?msg=no_selection', status_code=303)
+    job = job_manager.create(filename='upload-selected')
+    thread = threading.Thread(target=_run_upload_selected_job, args=(job, selected, reconcile), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
 
 
 @app.get("/catalog/export")
