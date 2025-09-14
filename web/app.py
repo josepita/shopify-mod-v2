@@ -148,6 +148,9 @@ def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: s
         total_variants += vcount
         estado_item = "subido" if base_ref in existing_set else "pendiente"
 
+        # URL imagen original (del CSV)
+        imagen_url = clean_value(row.get("IMAGEN 1", ""))
+
         rec = {
             "referencia": base_ref,
             "descripcion": descripcion,
@@ -159,6 +162,7 @@ def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: s
             "variantes": vcount,
             "variantes_subidas": variant_counts_map.get(base_ref, 0),
             "estado": estado_item,
+            "imagen_url": imagen_url,
         }
         records.append(rec)
 
@@ -201,6 +205,32 @@ def _build_catalog_records(df, q: str = "", categoria: str = "", subcategoria: s
     subcategorias = sorted({r["subcategoria"] for r in records if r["subcategoria"]})
 
     return filtered, metrics, categorias, subcategorias
+
+
+@app.get("/catalog/preview/{base_ref}")
+def catalog_preview(base_ref: str):
+    df = _load_catalog_df()
+    if df is None:
+        return JSONResponse({"error": "No hay catálogo cargado"}, status_code=400)
+    try:
+        grouped = group_variants(df)
+        if base_ref not in grouped:
+            # Intentar match por limpieza básica
+            key = next((k for k in grouped.keys() if clean_value(k) == clean_value(base_ref)), None)
+            if key is None:
+                return JSONResponse({"error": f"Referencia {base_ref} no encontrada"}, status_code=404)
+            base_ref = key
+        info = grouped[base_ref]
+        row = info["base_data"]
+        product_data = prepare_product_data(row, clean_value(base_ref))
+        variants_data = prepare_variants_data(info.get("variants", [])) if info.get("is_variant_product", False) else []
+        return {
+            "referencia": clean_value(base_ref),
+            "producto": product_data,
+            "variantes": variants_data,
+        }
+    except Exception as e:
+        return JSONResponse({"error": f"Error preparando preview: {e}"}, status_code=500)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -289,10 +319,12 @@ def catalog_export(
 
     def _iter_rows():
         header = [
+            "IMAGEN_URL",
             "REFERENCIA",
             "DESCRIPCION",
             "CATEGORIA",
             "SUBCATEGORIA",
+            "TIPO",
             "PRECIO",
             "STOCK",
             "VARIANTES",
@@ -307,10 +339,12 @@ def catalog_export(
         for r in records:
             writer.writerow(
                 [
+                    r.get("imagen_url", ""),
                     r["referencia"],
                     r["descripcion"],
                     r["categoria"],
                     r["subcategoria"],
+                    r.get("tipo", ""),
                     r["precio"],
                     r["stock"],
                     r["variantes"],

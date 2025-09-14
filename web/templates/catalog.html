@@ -1,44 +1,46 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h3>Catálogo desde CSV</h3>
+<div class="card p-3 mb-3">
+  <h3 class="h5">Catálogo desde CSV</h3>
   {% if not has_data %}
-    <p class="muted">Sube un CSV/XLS(X) para analizar qué productos están subidos a Shopify.</p>
+    <p class="text-muted">Sube un CSV/XLS(X) para analizar qué productos están subidos a Shopify.</p>
   {% endif %}
   {% if error %}
-    <p class="error">{{ error }}</p>
+    <p class="text-danger">{{ error }}</p>
   {% endif %}
-  <form action="/catalog/upload" method="post" enctype="multipart/form-data" style="margin-top:8px;">
-    <label for="file">Archivo de productos (XLS/XLSX/CSV)</label>
-    <input type="file" id="file" name="file" required>
-    <button class="btn btn-primary" type="submit" style="margin-left:8px;">Cargar</button>
+  <form action="/catalog/upload" method="post" enctype="multipart/form-data" class="mt-2 d-flex gap-2 align-items-end">
+    <div>
+      <label for="file">Archivo de productos (XLS/XLSX/CSV)</label>
+      <input class="form-control" type="file" id="file" name="file" required>
+    </div>
+    <button class="btn btn-primary" type="submit">Cargar</button>
   </form>
 </div>
 
 {% if has_data %}
-<div class="card">
-  <h4>Estadísticas</h4>
-  <div style="display:flex; gap:24px; flex-wrap:wrap;">
-    <div>Filas CSV: <strong>{{ metrics.total_rows }}</strong></div>
-    <div>Productos base: <strong>{{ metrics.total_products }}</strong></div>
-    <div>Variantes totales: <strong>{{ metrics.total_variants }}</strong></div>
-    <div>Subidos: <strong>{{ metrics.subidos }}</strong></div>
-    <div>Pendientes: <strong>{{ metrics.pendientes }}</strong></div>
-    <div>Cobertura: <strong>{{ metrics.coverage }}%</strong></div>
-    <div>Variantes subidas: <strong>{{ metrics.variants_subidas }}</strong></div>
+<div class="card p-3 mb-3">
+  <h4 class="h6">Estadísticas</h4>
+  <div class="row row-cols-2 row-cols-md-4 g-2">
+    <div class="col"><div class="p-2 border rounded">Filas CSV: <strong>{{ metrics.total_rows }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Productos base: <strong>{{ metrics.total_products }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Variantes totales: <strong>{{ metrics.total_variants }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Subidos: <strong>{{ metrics.subidos }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Pendientes: <strong>{{ metrics.pendientes }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Cobertura: <strong>{{ metrics.coverage }}%</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Variantes subidas: <strong>{{ metrics.variants_subidas }}</strong></div></div>
   </div>
 </div>
 
-<div class="card">
-  <h4>Filtros</h4>
-  <form action="/catalog" method="get" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+<div class="card p-3 mb-3">
+  <h4 class="h6">Filtros</h4>
+  <form action="/catalog" method="get" class="d-flex gap-3 flex-wrap align-items-end">
     <div>
       <label for="q">Buscar</label>
-      <input type="text" id="q" name="q" value="{{ q }}" placeholder="Referencia, categoría, subcategoría...">
+      <input class="form-control" type="text" id="q" name="q" value="{{ q }}" placeholder="Referencia, categoría, subcategoría...">
     </div>
     <div>
       <label for="categoria">Categoría</label>
-      <select id="categoria" name="categoria">
+      <select class="form-select" id="categoria" name="categoria">
         <option value="">(Todas)</option>
         {% for c in categorias %}
           <option value="{{ c }}" {% if categoria==c %}selected{% endif %}>{{ c }}</option>
@@ -47,7 +49,7 @@
     </div>
     <div>
       <label for="subcategoria">Subcategoría</label>
-      <select id="subcategoria" name="subcategoria">
+      <select class="form-select" id="subcategoria" name="subcategoria">
         <option value="">(Todas)</option>
         {% for sc in subcategorias %}
           <option value="{{ sc }}" {% if subcategoria==sc %}selected{% endif %}>{{ sc }}</option>
@@ -56,7 +58,7 @@
     </div>
     <div>
       <label for="estado">Estado</label>
-      <select id="estado" name="estado">
+      <select class="form-select" id="estado" name="estado">
         <option value="todos" {% if estado=='todos' %}selected{% endif %}>Todos</option>
         <option value="subido" {% if estado=='subido' %}selected{% endif %}>Subidos</option>
         <option value="pendiente" {% if estado=='pendiente' %}selected{% endif %}>Pendientes</option>
@@ -64,21 +66,22 @@
     </div>
     <div>
       <label for="per_page">Por página</label>
-      <input type="number" id="per_page" name="per_page" min="1" max="1000" value="{{ per_page or 50 }}" style="width:120px;">
+      <input class="form-control" type="number" id="per_page" name="per_page" min="1" max="1000" value="{{ per_page or 50 }}" style="width:120px;">
     </div>
     <div>
-      <button class="btn" type="submit">Aplicar</button>
-      <a class="btn" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar ({{ estado if estado!='todos' else 'pendiente' }})</a>
+      <button class="btn btn-outline-primary" type="submit">Aplicar</button>
+      <a class="btn btn-outline-secondary" href="/catalog/export?estado={{ estado }}&q={{ q }}&categoria={{ categoria }}&subcategoria={{ subcategoria }}">Exportar ({{ estado if estado!='todos' else 'pendiente' }})</a>
     </div>
   </form>
 </div>
 
-<div class="card">
-  <h4>Resultados</h4>
-  <div class="muted" style="margin-bottom:8px;">Mostrando página {{ page }} de {{ pages }} — {{ total }} resultados</div>
-  <table>
+<div class="card p-3 mb-3">
+  <h4 class="h6">Resultados</h4>
+  <div class="text-muted mb-2">Mostrando página {{ page }} de {{ pages }} — {{ total }} resultados</div>
+  <table class="table table-striped table-sm align-middle table-fixed">
     <thead>
       <tr>
+        <th style="width:90px;">Imagen</th>
         <th>Referencia</th>
         <th>Descripción</th>
         <th>Categoría</th>
@@ -88,11 +91,18 @@
         <th>Stock</th>
         <th>Variantes</th>
         <th>Estado</th>
+        <th>Acciones</th>
       </tr>
     </thead>
     <tbody>
       {% for r in records %}
         <tr>
+          <td>
+            {% if r.imagen_url %}
+              {% set imgsrc = r.imagen_url if r.imagen_url.startswith('http') else 'https://' ~ r.imagen_url %}
+              <img class="thumb" src="{{ imgsrc }}" alt="{{ r.descripcion }}">
+            {% endif %}
+          </td>
           <td>{{ r.referencia }}</td>
           <td>{{ r.descripcion }}</td>
           <td>{{ r.categoria }}</td>
@@ -101,22 +111,85 @@
           <td>{{ r.precio }}</td>
           <td>{{ r.stock }}</td>
           <td>{{ r.variantes }}</td>
-          <td>{% if r.estado=='subido' %}✅ Subido{% else %}⏳ Pendiente{% endif %}</td>
+          <td>{% if r.estado=='subido' %}<span class="badge text-bg-success">Subido</span>{% else %}<span class="badge text-bg-warning text-dark">Pendiente</span>{% endif %}</td>
+          <td>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-ref="{{ r.referencia }}" onclick="showPreview(this)">Ver datos Shopify</button>
+          </td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
-  <div style="display:flex; gap:8px; margin-top:12px;">
+  <div class="d-flex gap-2 mt-2">
     {% set qparams = 'q=' ~ q ~ '&categoria=' ~ categoria ~ '&subcategoria=' ~ subcategoria ~ '&estado=' ~ estado ~ '&per_page=' ~ (per_page or 50) %}
     {% if page > 1 %}
-      <a class="btn" href="/catalog?{{ qparams }}&page=1">« Primera</a>
-      <a class="btn" href="/catalog?{{ qparams }}&page={{ page - 1 }}">‹ Anterior</a>
+      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page=1">« Primera</a>
+      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ page - 1 }}">‹ Anterior</a>
     {% endif %}
     {% if page < pages %}
-      <a class="btn" href="/catalog?{{ qparams }}&page={{ page + 1 }}">Siguiente ›</a>
-      <a class="btn" href="/catalog?{{ qparams }}&page={{ pages }}">Última »</a>
+      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ page + 1 }}">Siguiente ›</a>
+      <a class="btn btn-outline-secondary" href="/catalog?{{ qparams }}&page={{ pages }}">Última »</a>
     {% endif %}
   </div>
 </div>
+
+<!-- Modal Bootstrap para preview -->
+<div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Datos para Shopify</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body">
+        <div id="previewContent" class="small text-muted">Cargando…</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+<script>
+  async function showPreview(btn) {
+    const ref = btn.getAttribute('data-ref');
+    const modalEl = document.getElementById('previewModal');
+    const content = document.getElementById('previewContent');
+    content.innerHTML = 'Cargando…';
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    modal.show();
+    try {
+      const res = await fetch(`/catalog/preview/${encodeURIComponent(ref)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error');
+      content.innerHTML = renderPreview(data);
+    } catch (e) {
+      content.innerHTML = `<div class="text-danger">${e.message}</div>`;
+    }
+  }
+
+  function renderPreview(data) {
+    const p = data.producto || {};
+    const imgs = (p.images || []).map(img => `<img src="${img.src}" alt="img" class="me-2 mb-2" style="max-height:100px; border:1px solid #eee; border-radius:4px;">`).join('');
+    const metas = p.metafields ? Object.entries(p.metafields).filter(([k,v]) => v).map(([k,v]) => `<li><strong>${k}:</strong> ${v}</li>`).join('') : '';
+    const variants = (data.variantes || []).map(v => `
+      <li>
+        SKU: ${v.sku} — Talla: ${v.size} — Precio: ${v.price} — Stock: ${v.stock} — Peso: ${v.weight} g
+      </li>
+    `).join('');
+    return `
+      <div class="mb-2"><strong>Referencia:</strong> ${data.referencia || ''}</div>
+      <div class="mb-2"><strong>Título:</strong> ${p.title || ''}</div>
+      <div class="mb-2"><strong>SKU:</strong> ${p.sku || ''}</div>
+      <div class="mb-2"><strong>Tipo:</strong> ${p.product_type || ''}</div>
+      <div class="mb-2"><strong>Precio:</strong> ${p.price || ''} — <strong>Stock:</strong> ${p.stock || ''} — <strong>Peso:</strong> ${p.weight || ''} g</div>
+      <div class="mb-2"><strong>Tags:</strong> ${p.tags || ''}</div>
+      ${metas ? `<div class="mb-2"><strong>Metafields</strong><ul class="mb-2">${metas}</ul></div>` : ''}
+      ${imgs ? `<div class="mb-2"><strong>Imágenes</strong><div class="d-flex flex-wrap">${imgs}</div></div>` : ''}
+      ${variants ? `<div class="mb-2"><strong>Variantes</strong><ul>${variants}</ul></div>` : ''}
+    `;
+  }
+</script>
+
 {% endif %}
 {% endblock %}
