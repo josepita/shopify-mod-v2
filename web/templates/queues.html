@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3 mb-3">
+  <h3 class="h5">Colas de actualización</h3>
+  <div class="row row-cols-2 row-cols-md-4 g-2">
+    <div class="col"><div class="p-2 border rounded">Precios pendientes: <strong>{{ counts.prices_pending }}</strong></div></div>
+    <div class="col"><div class="p-2 border rounded">Stock pendientes: <strong>{{ counts.stock_pending }}</strong></div></div>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <form action="/queues/process" method="post" class="d-flex gap-2 align-items-end">
+    <div>
+      <label for="type">Tipo</label>
+      <select class="form-select" id="type" name="type">
+        <option value="all">Todos</option>
+        <option value="prices">Precios</option>
+        <option value="stock">Stock</option>
+      </select>
+    </div>
+    <div>
+      <label for="batch">Tamaño de lote</label>
+      <input class="form-control" type="number" id="batch" name="batch" value="50" min="1" max="1000">
+    </div>
+    <button class="btn btn-primary" type="submit">Procesar</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-3">
+  <h4 class="h6">Pendientes de precio ({{ pending_prices|length }})</h4>
+  <table class="table table-sm table-striped align-middle">
+    <thead>
+      <tr>
+        <th>ID</th><th>SKU</th><th>Nuevo precio</th><th>Variant ID</th><th>Product ID</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in pending_prices %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.sku }}</td>
+        <td>{{ r.new_price }}</td>
+        <td>{{ r.shopify_variant_id }}</td>
+        <td>{{ r.shopify_product_id }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card p-3 mb-3">
+  <h4 class="h6">Pendientes de stock ({{ pending_stock|length }})</h4>
+  <table class="table table-sm table-striped align-middle">
+    <thead>
+      <tr>
+        <th>ID</th><th>SKU</th><th>Nuevo stock</th><th>Variant ID</th><th>Product ID</th><th>Inventory Item</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in pending_stock %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.sku }}</td>
+        <td>{{ r.new_stock }}</td>
+        <td>{{ r.shopify_variant_id }}</td>
+        <td>{{ r.shopify_product_id }}</td>
+        <td>{{ r.inventory_item_id }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+

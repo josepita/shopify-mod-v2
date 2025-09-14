@@ -23,6 +23,9 @@ import importlib
 from fastapi import Query
 from fastapi.responses import StreamingResponse
 import csv
+from db import queue_manager as qm
+from services.shopify_graphql import ShopifyGraphQL
+import logging
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -635,3 +638,98 @@ def export_database():
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# =====================
+# Sección de COLAS
+# =====================
+
+@app.get("/queues", response_class=HTMLResponse)
+def queues_page(request: Request, limit: int = 50):
+    counts = qm.get_queue_counts()
+    pending_prices = qm.list_pending_prices(limit=limit)
+    pending_stock = qm.list_pending_stock(limit=limit)
+    return templates.TemplateResponse(
+        "queues.html",
+        {
+            "request": request,
+            "counts": counts,
+            "pending_prices": pending_prices,
+            "pending_stock": pending_stock,
+            "limit": limit,
+        },
+    )
+
+
+def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = 2.2):
+    job.append_log("Iniciando procesamiento de cola de precios...\n")
+    gql = ShopifyGraphQL()
+    processed = 0
+    items = qm.list_pending_prices(limit=batch_limit)
+    for it in items:
+        try:
+            ok = gql.bulk_update_variant_price(str(it["shopify_product_id"]), str(it["shopify_variant_id"]), float(it["new_price"]), margin=margin)
+            qm.mark_queue_status("price_updates_queue", it["id"], "completed" if ok else "error")
+            processed += 1
+            job.append_log(f"Precio SKU {it['sku']}: {'OK' if ok else 'ERROR'}\n")
+        except Exception as e:
+            qm.mark_queue_status("price_updates_queue", it["id"], "error")
+            job.append_log(f"Error precio SKU {it['sku']}: {e}\n")
+    job.append_log(f"Procesados precios: {processed}\n")
+
+
+def _process_stock_queues(job: Job, batch_limit: int = 50):
+    job.append_log("Iniciando procesamiento de cola de stock...\n")
+    # Reusar setup REST para niveles de inventario
+    try:
+        main_mod = importlib.import_module("main")
+        if not main_mod.setup_shopify_api():
+            raise RuntimeError("No se pudo establecer conexión con Shopify")
+        location_id = main_mod.get_location_id()
+    except Exception as e:
+        job.append_log(f"Error configurando API Shopify: {e}\n")
+        return
+
+    import shopify  # type: ignore
+    processed = 0
+    items = qm.list_pending_stock(limit=batch_limit)
+    for it in items:
+        try:
+            inv_item_id = it["inventory_item_id"]
+            # Si faltara, intentar resolver por SKU vía GraphQL
+            if not inv_item_id:
+                gql = ShopifyGraphQL()
+                info = gql.get_variant_info_by_sku(it["sku"])
+                inv_item_id = info.get("inventory_item_id") if info else None
+            if not inv_item_id:
+                raise RuntimeError("No se pudo determinar inventory_item_id")
+            shopify.InventoryLevel.set(location_id=location_id, inventory_item_id=inv_item_id, available=int(it["new_stock"]))
+            qm.mark_queue_status("stock_updates_queue", it["id"], "completed")
+            processed += 1
+            job.append_log(f"Stock SKU {it['sku']}: OK\n")
+        except Exception as e:
+            qm.mark_queue_status("stock_updates_queue", it["id"], "error")
+            job.append_log(f"Error stock SKU {it['sku']}: {e}\n")
+    job.append_log(f"Procesados stock: {processed}\n")
+
+
+def _run_queue_job(job: Job, process_type: str = "all", batch_limit: int = 50):
+    job.status = "running"
+    try:
+        if process_type in ("all", "prices"):
+            _process_price_queues(job, batch_limit=batch_limit)
+        if process_type in ("all", "stock"):
+            _process_stock_queues(job, batch_limit=batch_limit)
+        job.status = "done"
+    except Exception as e:
+        logging.exception("Error en procesamiento de colas")
+        job.status = "error"
+        job.error_message = str(e)
+
+
+@app.post("/queues/process")
+def queues_process(request: Request, type: str = Form("all"), batch: int = Form(50)):
+    job = job_manager.create(filename=f"queues-{type}")
+    thread = threading.Thread(target=_run_queue_job, args=(job, type, batch), daemon=True)
+    thread.start()
+    return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
