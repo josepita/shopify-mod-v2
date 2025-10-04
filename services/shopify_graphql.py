@@ -8,7 +8,13 @@ import time
 import logging
 from typing import Dict, Any, Optional, List
 import requests
-from config.settings import SHOPIFY_SHOP_URL, SHOPIFY_ACCESS_TOKEN, SHOPIFY_API_VERSION
+from config.settings import (
+    SHOPIFY_SHOP_URL,
+    SHOPIFY_ACCESS_TOKEN,
+    SHOPIFY_API_VERSION,
+    SHOPIFY_GQL_USE_SESSION,
+    REQUEST_TIMEOUT,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -28,11 +34,15 @@ class ShopifyGraphQL:
             "X-Shopify-Access-Token": self.access_token,
             "Content-Type": "application/json",
         }
+        self.timeout = REQUEST_TIMEOUT or 30
         self.last_request_time = 0.0
         self.min_request_interval = 0.1
         self.current_retry = 0
         self.max_retries = 3
         self.retry_after = 0.0
+        self.session = requests.Session() if SHOPIFY_GQL_USE_SESSION else None
+        # Última info de throttling/coste reportada por GraphQL
+        self.last_extensions: Dict[str, Any] | None = None
 
     def _handle_rate_limit(self) -> None:
         now = time.time()
@@ -49,7 +59,11 @@ class ShopifyGraphQL:
         while True:
             self._handle_rate_limit()
             try:
-                resp = requests.post(self.endpoint, headers=self.headers, json={"query": query, "variables": variables or {}})
+                payload = {"query": query, "variables": variables or {}}
+                if self.session is not None:
+                    resp = self.session.post(self.endpoint, headers=self.headers, json=payload, timeout=self.timeout)
+                else:
+                    resp = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.timeout)
                 if resp.status_code == 429:
                     self.current_retry += 1
                     if self.current_retry > self.max_retries:
@@ -62,6 +76,11 @@ class ShopifyGraphQL:
                 self.current_retry = 0
                 if "errors" in data:
                     raise Exception(str(data["errors"]))
+                # Guardar extensiones para control adaptativo (throttle/cost)
+                try:
+                    self.last_extensions = data.get("extensions")
+                except Exception:
+                    self.last_extensions = None
                 return data.get("data", {})
             except requests.exceptions.RequestException as e:
                 logger.error(f"GraphQL error: {e}")
@@ -154,3 +173,63 @@ class ShopifyGraphQL:
             logger.error(f"Error bulk_update_variant_price: {e}")
             return False
 
+    def product_variants_bulk_update(self, product_id: str, variants_input: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Actualiza múltiples variantes de un producto en una sola llamada.
+
+        variants_input: lista de dicts con al menos {"id": gid_variant, "price": str, ...}
+        Devuelve dict con claves: productVariants, userErrors
+        """
+        mutation = """
+        mutation bulkUpdateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id price }
+            userErrors { field message }
+          }
+        }
+        """
+        variables = {
+            "productId": f"gid://shopify/Product/{product_id}",
+            "variants": variants_input,
+        }
+        data = self._request(mutation, variables)
+        return data.get("productVariantsBulkUpdate", {})
+
+    def inventory_set_quantities(
+        self,
+        location_id: str,
+        quantities: List[Dict[str, Any]],
+        ignore_compare_quantity: bool = True,
+        name: str = "available",
+        reason: str = "correction",
+        reference_document_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Establece cantidades de inventario en bloque para múltiples inventory items.
+
+        quantities: lista de dicts con keys: inventoryItemId (GID), locationId (GID), quantity, compareQuantity(optional)
+        Devuelve dict con claves: inventoryAdjustmentGroup, userErrors
+        """
+        mutation = """
+        mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+          inventorySetQuantities(input: $input) {
+            inventoryAdjustmentGroup {
+              reason
+              referenceDocumentUri
+              changes { name quantityAfterChange }
+            }
+            userErrors { code field message }
+          }
+        }
+        """
+        variables = {
+            "input": {
+                "ignoreCompareQuantity": bool(ignore_compare_quantity),
+                "name": name,
+                "reason": reason,
+                "referenceDocumentUri": reference_document_uri or "system://queues/stock",
+                "quantities": quantities,
+            }
+        }
+        data = self._request(mutation, variables)
+        return data.get("inventorySetQuantities", {})

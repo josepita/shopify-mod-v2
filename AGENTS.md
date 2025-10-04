@@ -1,18 +1,22 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Source: `main.py` (entrypoint) and domain modules under `config/`, `db/`, and `utils/`.
-- Config: `config/settings.py` loads `.env` (Shopify + MySQL). Logs write to `logs/`.
+- Source: `main.py` (entrypoint) and domain modules under `config/`, `db/`, `services/`, and `utils/`.
+- Web UI: `web/` (FastAPI app) con `app.py`, plantillas en `web/templates/`, estáticos en `web/static/`, subidas en `web/uploads/`.
+- Services: `services/shopify_graphql.py` (cliente GraphQL minimal para Shopify).
+- Config: `config/settings.py` carga `.env` (Shopify + MySQL). Logs a `logs/`.
 - Database: `db/migrations.py`, `db/mysql_connector.py`, `db/product_mapper.py`.
-- Scripts: helper tools in `scripts/` (e.g., `sync_stock_price.py`, `update_from_presta.py`).
-- Assets/docs: `reglas-medidas.md`, `tree.txt`. Requirements in `requirements.txt`.
+- Scripts: utilidades en `scripts/` (p.ej. `sync_stock_price.py`, `update_from_presta.py`).
+- Datos: `data/` con `csv_archive/` y `catalog_diffs/`.
+- Assets/docs: `reglas-medidas.md`, `tree.txt`. Requisitos en `requirements.txt`.
 
 ## Build, Test, and Development Commands
 - Install: `pip install -r requirements.txt`
-- DB setup: `python migrations_run.py` (creates required MySQL tables).
-- Run (preview): `python main.py productos.xlsx screen-10`
-- Run (API): `python main.py productos.xlsx api-50`
-- Scripts: `python scripts/sync_stock_price.py` (stock/price sync), others analogously.
+- DB setup: `python migrations_run.py` (crea las tablas MySQL requeridas).
+- Run (CLI preview): `python main.py productos.xlsx screen-10`
+- Run (CLI API): `python main.py productos.xlsx api-50`
+- Run Web UI (FastAPI): `python -m uvicorn web.app:app --reload --host 0.0.0.0 --port 8000`
+- Scripts: `python scripts/sync_stock_price.py` (sync de stock/precio), otros análogos.
 
 ## Coding Style & Naming Conventions
 - Python 3.10+, 4‑space indentation, PEP 8; prefer type hints and docstrings.
@@ -36,3 +40,7 @@
 - Create `.env` with: `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_SHOP_URL`, `MYSQL_HOST`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, optional `SHOPIFY_API_VERSION`.
 - Do not commit `.env`, credentials, or private data. Mask tokens in logs.
 - Validate config at startup comes from `settings.py`; keep secrets out of code and tests.
+
+## Notes for Agents
+- Si el front no muestra snapshots en `/catalog/archive`, revisa `_list_snapshot_stats` en `web/app.py`. Existe un fallback que tolera `ONLY_FULL_GROUP_BY` y cursores dict.
+- Requisitos web: además de FastAPI/Uvicorn, se usan `requests` y `beautifulsoup4` para descarga/parseo de catálogos remotos. Asegúrate de que estén listados en `requirements.txt`.

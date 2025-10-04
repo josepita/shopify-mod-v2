@@ -35,6 +35,14 @@ CSV_PASSWORD = os.getenv('CSV_PASSWORD', '')
 PRICE_MARGIN = float(os.getenv('PRICE_MARGIN', '2.2'))
 MAX_QUEUE_RETRIES = int(os.getenv('MAX_QUEUE_RETRIES', '3'))
 
+# Feature flags (permiten activar/desactivar optimizaciones de forma segura)
+# Mantener por defecto el comportamiento actual (rollback inmediato cambiando .env)
+QUEUES_USE_GRAPHQL_STOCK_BULK = os.getenv('QUEUES_USE_GRAPHQL_STOCK_BULK', 'false').lower() in ('1','true','yes','y')
+QUEUES_GROUP_PRICE_BY_PRODUCT = os.getenv('QUEUES_GROUP_PRICE_BY_PRODUCT', 'false').lower() in ('1','true','yes','y')
+SHOPIFY_GQL_USE_SESSION = os.getenv('SHOPIFY_GQL_USE_SESSION', 'true').lower() in ('1','true','yes','y')
+QUEUES_DRAIN_CONTINUOUS = os.getenv('QUEUES_DRAIN_CONTINUOUS', 'false').lower() in ('1','true','yes','y')
+QUEUES_ADAPTIVE_THROTTLE = os.getenv('QUEUES_ADAPTIVE_THROTTLE', 'false').lower() in ('1','true','yes','y')
+
 # Configuración de logging
 LOG_DIR = 'logs'
 if not os.path.exists(LOG_DIR):

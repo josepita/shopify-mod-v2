@@ -7,3 +7,5 @@
 .venv/
 /temp/
 /backups/
+/docs/
+/venv/

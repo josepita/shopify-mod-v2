@@ -1,0 +1,31 @@
+# Mapeo ejemplo de campos del catálogo/Shopify a variables de la plantilla.
+# Ajusta estos nombres a las columnas reales de tu CSV/snapshot y atributos Shopify.
+
+variables:
+  titulo:
+    # Por defecto usamos la columna DESCRIPCION del CSV (o título de Shopify cuando esté disponible)
+    from: [csv.DESCRIPCION, shopify.title]
+  categoria:
+    from: [csv.CATEGORIA]
+  subcategoria:
+    from: [csv.SUBCATEGORIA]
+  marca:
+    from: [csv.MARCA, shopify.vendor]
+
+# Campos que se convertirán en bullets de especificaciones (bullets_specs)
+specs:
+  - key: Referencia
+    from: [csv.REFERENCIA]
+  - key: Tipo
+    from: [csv.TIPO]
+  - key: Precio
+    from: [csv.PRECIO]
+  - key: Stock
+    from: [csv.STOCK]
+  # Añade aquí más atributos disponibles (p. ej. Material, Color, Medidas, Peso, etc.)
+
+# Reglas/ayudas de medidas opcionales.
+medidas:
+  source_file: reglas-medidas.md
+  # Si no aplica, puedes dejarlo vacío y el generador omitirá este bloque.
+

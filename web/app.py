@@ -15,7 +15,19 @@ from fastapi.templating import Jinja2Templates
 from .job_manager import job_manager, Job
 from utils.helpers import group_variants, clean_value, get_base_reference
 from utils.prepare import prepare_product_data, prepare_variants_data
-from config.settings import MYSQL_CONFIG, CSV_URL, CSV_USERNAME, CSV_PASSWORD, PRICE_MARGIN, MAX_QUEUE_RETRIES, SHOPIFY_SHOP_URL
+from config.settings import (
+    MYSQL_CONFIG,
+    CSV_URL,
+    CSV_USERNAME,
+    CSV_PASSWORD,
+    PRICE_MARGIN,
+    MAX_QUEUE_RETRIES,
+    SHOPIFY_SHOP_URL,
+    QUEUES_USE_GRAPHQL_STOCK_BULK,
+    QUEUES_GROUP_PRICE_BY_PRODUCT,
+    QUEUES_DRAIN_CONTINUOUS,
+    QUEUES_ADAPTIVE_THROTTLE,
+)
 import mysql.connector  # type: ignore
 import datetime as _dt
 from pathlib import Path
@@ -302,18 +314,26 @@ def _archive_and_snapshot_df(df, original_filename: str) -> None:
                 stock = int(float(str(r.get("STOCK", "0")).replace(",", "."))) if "STOCK" in cols else None
             except Exception:
                 stock = None
+            # Truncar a los tamaños de columna para evitar errores en modo estricto
+            ref = ref[:255]
+            base_ref = base_ref[:255]
+            descripcion = gv(r, "DESCRIPCION")[:512]
+            categoria = gv(r, "CATEGORIA")[:255]
+            subcategoria = gv(r, "SUBCATEGORIA")[:255]
+            tipo = gv(r, "TIPO")[:255]
+            imagen1 = gv(r, "IMAGEN 1")[:1024]
             rows.append(
                 (
                     ts.strftime("%Y-%m-%d %H:%M:%S"),
                     ref,
                     base_ref,
-                    gv(r, "DESCRIPCION"),
+                    descripcion,
                     precio,
                     stock,
-                    gv(r, "CATEGORIA"),
-                    gv(r, "SUBCATEGORIA"),
-                    gv(r, "TIPO"),
-                    gv(r, "IMAGEN 1"),
+                    categoria,
+                    subcategoria,
+                    tipo,
+                    imagen1,
                 )
             )
         if rows:
@@ -326,9 +346,13 @@ def _archive_and_snapshot_df(df, original_filename: str) -> None:
                 rows,
             )
             cnx.commit()
+            logging.info(f"Snapshot guardado: {len(rows)} filas en {ts.strftime('%Y-%m-%d %H:%M:%S')}")
         cur.close(); cnx.close()
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            logging.exception(f"Error guardando snapshot en BD: {e}")
+        except Exception:
+            pass
 
 
 def _save_catalog_metadata(df, dest: Path, source: str) -> None:
@@ -348,7 +372,11 @@ def _save_catalog_metadata(df, dest: Path, source: str) -> None:
 
 
 def _list_snapshot_stats(limit: int = 100):
-    """Devuelve lista de snapshots con métricas agregadas."""
+    """Devuelve lista de snapshots con métricas agregadas.
+
+    Robusta frente a SQL_MODE ONLY_FULL_GROUP_BY u otros errores: si el
+    agregado falla, cae a un DISTINCT + consultas separadas por fecha.
+    """
     try:
         cnx = mysql.connector.connect(
             host=MYSQL_CONFIG.get("host"),
@@ -358,48 +386,59 @@ def _list_snapshot_stats(limit: int = 100):
             port=MYSQL_CONFIG.get("port", 3306),
         )
         cur = cnx.cursor(dictionary=True)
-        cur.execute(
-            """
-            SELECT snapshot_date,
-                   COUNT(*) AS rows,
-                   SUM(CASE WHEN precio IS NULL OR precio=0 THEN 1 ELSE 0 END) AS zero_price,
-                   SUM(CASE WHEN stock IS NULL OR stock=0 THEN 1 ELSE 0 END) AS zero_stock
-            FROM catalog_snapshots
-            GROUP BY snapshot_date
-            ORDER BY snapshot_date DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        out = []
-        rows_db = cur.fetchall()
-        for row in rows_db:
-            sd = row.get('snapshot_date')
-            rows = int(row.get('rows') or 0)
-            zp = int(row.get('zero_price') or 0)
-            zs = int(row.get('zero_stock') or 0)
-            out.append(
-                {
-                    "snapshot_date": (sd.strftime("%Y-%m-%d %H:%M:%S") if hasattr(sd, 'strftime') else str(sd) if sd else ""),
-                    "rows": rows,
-                    "pct_zero_price": round((zp / rows) * 100, 2) if rows else 0.0,
-                    "pct_zero_stock": round((zs / rows) * 100, 2) if rows else 0.0,
-                }
+        out: list[dict] = []
+        try:
+            cur.execute(
+                """
+                SELECT snapshot_date,
+                       COUNT(*) AS rows,
+                       SUM(CASE WHEN precio IS NULL OR precio=0 THEN 1 ELSE 0 END) AS zero_price,
+                       SUM(CASE WHEN stock IS NULL OR stock=0 THEN 1 ELSE 0 END) AS zero_stock
+                FROM catalog_snapshots
+                GROUP BY snapshot_date
+                ORDER BY snapshot_date DESC
+                LIMIT %s
+                """,
+                (limit,),
             )
-        # Fallback: si no hay filas (o por SQL mode), intentar DISTINCT y calcular por snapshot
-        if not out:
+            rows_db = cur.fetchall()
+            for row in rows_db:
+                sd = row.get('snapshot_date')
+                rows = int(row.get('rows') or 0)
+                zp = int(row.get('zero_price') or 0)
+                zs = int(row.get('zero_stock') or 0)
+                out.append(
+                    {
+                        "snapshot_date": (sd.strftime("%Y-%m-%d %H:%M:%S") if hasattr(sd, 'strftime') else str(sd) if sd else ""),
+                        "rows": rows,
+                        "pct_zero_price": round((zp / rows) * 100, 2) if rows else 0.0,
+                        "pct_zero_stock": round((zs / rows) * 100, 2) if rows else 0.0,
+                    }
+                )
+        except Exception as e1:
+            # Fallback seguro: usar DISTINCT y calcular por fecha con consultas separadas.
+            logging.warning(f"Fallo agregando snapshots (intentando fallback): {e1}")
             cur.execute(
                 "SELECT DISTINCT snapshot_date FROM catalog_snapshots ORDER BY snapshot_date DESC LIMIT %s",
                 (limit,),
             )
-            dates = [r["snapshot_date"] if isinstance(r, dict) else r[0] for r in cur.fetchall()]
+            dates_rows = cur.fetchall()
+            dates = [r["snapshot_date"] if isinstance(r, dict) else r[0] for r in dates_rows]
             for sd in dates:
                 cur.execute(
                     "SELECT COUNT(*), SUM(CASE WHEN precio IS NULL OR precio=0 THEN 1 ELSE 0 END), SUM(CASE WHEN stock IS NULL OR stock=0 THEN 1 ELSE 0 END) FROM catalog_snapshots WHERE snapshot_date=%s",
                     (sd,),
                 )
-                c_rows, c_zp, c_zs = cur.fetchone()
-                c_rows = int(c_rows or 0); c_zp = int(c_zp or 0); c_zs = int(c_zs or 0)
+                row = cur.fetchone()
+                # Si el cursor es dictionary=True, row será un dict; si no, será una tupla.
+                if isinstance(row, dict):
+                    vals = list(row.values())
+                else:
+                    vals = list(row or [])
+                # Normalizar valores numéricos
+                c_rows = int((vals[0] or 0) if len(vals) > 0 else 0)
+                c_zp = int((vals[1] or 0) if len(vals) > 1 else 0)
+                c_zs = int((vals[2] or 0) if len(vals) > 2 else 0)
                 out.append(
                     {
                         "snapshot_date": (sd.strftime("%Y-%m-%d %H:%M:%S") if hasattr(sd, 'strftime') else str(sd) if sd else ""),
@@ -410,7 +449,11 @@ def _list_snapshot_stats(limit: int = 100):
                 )
         cur.close(); cnx.close()
         return out
-    except Exception:
+    except Exception as e:
+        try:
+            logging.exception(f"Error listando snapshots: {e}")
+        except Exception:
+            pass
         return []
 
 
@@ -799,6 +842,13 @@ def _run_compare_job(job: Job, mode: str, params: dict):
             p1: Path = params['path1']
             p2: Path = params['path2']
             job.append_log(f"Leyendo archivos: {p1.name} vs {p2.name}\n")
+            df1 = _load_dataframe_for_preview(p1)
+            df2 = _load_dataframe_for_preview(p2)
+        elif mode == 'files':
+            # Comparación entre archivos ya archivados en disco
+            p1: Path = params['path1']
+            p2: Path = params['path2']
+            job.append_log(f"Leyendo archivos archivados: {p1} vs {p2}\n")
             df1 = _load_dataframe_for_preview(p1)
             df2 = _load_dataframe_for_preview(p2)
         else:
@@ -1642,28 +1692,112 @@ def queues_page(request: Request, limit: int = 50):
 def _process_price_queues(job: Job, batch_limit: int = 50, margin: float = PRICE_MARGIN) -> int:
     job.append_log("Iniciando procesamiento de cola de precios...\n")
     gql = ShopifyGraphQL()
-    processed = 0
     items = qm.list_pending_prices(limit=batch_limit)
-    for it in items:
-        try:
-            ok = gql.bulk_update_variant_price(str(it["shopify_product_id"]), str(it["shopify_variant_id"]), float(it["new_price"]), margin=margin)
-            qm.mark_queue_status("price_updates_queue", it["id"], "completed" if ok else "processing")
-            if not ok:
-                qm.register_error("price_updates_queue", it["id"], "GraphQL update failed")
-            else:
-                qm.mark_queue_status("price_updates_queue", it["id"], "completed")
-            processed += 1
-            job.append_log(f"Precio SKU {it['sku']}: {'OK' if ok else 'ERROR'}\n")
-        except Exception as e:
-            qm.register_error("price_updates_queue", it["id"], str(e))
-            job.append_log(f"Error precio SKU {it['sku']}: {e}\n")
+    if not items:
+        job.append_log("Sin elementos pendientes de precio.\n")
+        return 0
+
+    processed = 0
+    if QUEUES_GROUP_PRICE_BY_PRODUCT:
+        # Agrupar por producto y enviar una sola llamada por producto
+        by_product: dict[int, list[dict]] = {}
+        for it in items:
+            pid = int(it["shopify_product_id"]) if it.get("shopify_product_id") else None
+            if pid is None:
+                continue
+            by_product.setdefault(pid, []).append(it)
+        # Parámetros para control adaptativo
+        est_cost_per_item = 10.0  # estimación inicial conservadora
+        min_batch = max(1, min(20, batch_limit))
+        max_batch = batch_limit
+        for pid, group in by_product.items():
+            try:
+                # Determinar sub-lote según throttle (si disponible)
+                sub_batch = len(group)
+                if QUEUES_ADAPTIVE_THROTTLE and getattr(gql, 'last_extensions', None) and gql.last_extensions.get("cost"):
+                    ts = gql.last_extensions["cost"].get("throttleStatus", {})
+                    current = float(ts.get("currentlyAvailable", 1000))
+                    maximum = float(ts.get("maximumAvailable", 1000))
+                    rate = float(ts.get("restoreRate", 50))
+                    budget = min(0.8 * maximum, current + 1.0 * rate)
+                    # actualizar estimación de coste por item si hay métricas
+                    try:
+                        last_req_cost = float(gql.last_extensions["cost"].get("requestedQueryCost") or 0)
+                        # evitar división por 0
+                        last_items = max(1, len(group))
+                        if last_req_cost > 0:
+                            est_cost_per_item = max(1.0, last_req_cost / last_items)
+                    except Exception:
+                        pass
+                    calc = int(budget // est_cost_per_item)
+                    sub_batch = max(min_batch, min(max_batch, calc if calc > 0 else min_batch))
+                    if calc <= 0:
+                        need = est_cost_per_item - current
+                        sleep_s = max(0, int((need / rate) + 1)) if rate > 0 else 1
+                        job.append_log(f"Throttle bajo (cur={current:.0f}/{maximum:.0f}, rate={rate:.0f}). Esperando {sleep_s}s…\n")
+                        _time.sleep(sleep_s)
+                        # recalcular sub_batch tras la espera
+                        sub_batch = max(min_batch, min(max_batch, int((current + rate * sleep_s) // est_cost_per_item)))
+
+                slice_group = group[:sub_batch]
+                variants_input = []
+                for it in slice_group:
+                    try:
+                        cost = float(it["new_price"])
+                    except Exception:
+                        cost = 0.0
+                    price_val = round(cost * float(margin), 2)
+                    variants_input.append({
+                        "id": f"gid://shopify/ProductVariant/{int(it['shopify_variant_id'])}",
+                        "price": str(price_val),
+                        "inventoryItem": {"cost": cost},
+                    })
+                result = gql.product_variants_bulk_update(str(pid), variants_input)
+                user_errors = result.get("userErrors", [])
+                # Log de throttling y coste
+                if getattr(gql, 'last_extensions', None) and gql.last_extensions.get("cost"):
+                    cost_info = gql.last_extensions["cost"]
+                    ts = cost_info.get("throttleStatus", {})
+                    job.append_log(
+                        f"Throttle: cur={ts.get('currentlyAvailable')} max={ts.get('maximumAvailable')} rate={ts.get('restoreRate')} cost={cost_info.get('requestedQueryCost')} batch={len(variants_input)}\n"
+                    )
+                if user_errors:
+                    # Registrar error por cada elemento del grupo
+                    for it in slice_group:
+                        qm.register_error("price_updates_queue", it["id"], f"Bulk errors: {user_errors}")
+                        job.append_log(f"Precio SKU {it['sku']}: ERROR (bulk)\n")
+                else:
+                    for it in slice_group:
+                        qm.mark_queue_status("price_updates_queue", it["id"], "completed")
+                        job.append_log(f"Precio SKU {it['sku']}: OK\n")
+                        processed += 1
+            except Exception as e:
+                for it in slice_group if 'slice_group' in locals() else group:
+                    qm.register_error("price_updates_queue", it["id"], str(e))
+                    job.append_log(f"Error precio SKU {it['sku']}: {e}\n")
+    else:
+        # Comportamiento actual: una llamada por variante
+        for it in items:
+            try:
+                ok = gql.bulk_update_variant_price(str(it["shopify_product_id"]), str(it["shopify_variant_id"]), float(it["new_price"]), margin=margin)
+                qm.mark_queue_status("price_updates_queue", it["id"], "completed" if ok else "processing")
+                if not ok:
+                    qm.register_error("price_updates_queue", it["id"], "GraphQL update failed")
+                    job.append_log(f"Precio SKU {it['sku']}: ERROR\n")
+                else:
+                    qm.mark_queue_status("price_updates_queue", it["id"], "completed")
+                    job.append_log(f"Precio SKU {it['sku']}: OK\n")
+                    processed += 1
+            except Exception as e:
+                qm.register_error("price_updates_queue", it["id"], str(e))
+                job.append_log(f"Error precio SKU {it['sku']}: {e}\n")
     job.append_log(f"Procesados precios (lote): {processed}\n")
     return processed
 
 
 def _process_stock_queues(job: Job, batch_limit: int = 50) -> int:
     job.append_log("Iniciando procesamiento de cola de stock...\n")
-    # Reusar setup REST para niveles de inventario
+    # Obtener location una sola vez
     try:
         main_mod = importlib.import_module("main")
         if not main_mod.setup_shopify_api():
@@ -1671,28 +1805,108 @@ def _process_stock_queues(job: Job, batch_limit: int = 50) -> int:
         location_id = main_mod.get_location_id()
     except Exception as e:
         job.append_log(f"Error configurando API Shopify: {e}\n")
-        return
+        return 0
 
-    import shopify  # type: ignore
-    processed = 0
     items = qm.list_pending_stock(limit=batch_limit)
-    for it in items:
-        try:
-            inv_item_id = it["inventory_item_id"]
-            # Si faltara, intentar resolver por SKU vía GraphQL
+    if not items:
+        job.append_log("Sin elementos pendientes de stock.\n")
+        return 0
+
+    processed = 0
+    if QUEUES_USE_GRAPHQL_STOCK_BULK:
+        gql = ShopifyGraphQL()
+        # Preparar cantidades; resolver inventory_item_id faltantes de forma puntual
+        all_quantities = []
+        valid_items = []
+        for it in items:
+            inv_item_id = it.get("inventory_item_id")
             if not inv_item_id:
-                gql = ShopifyGraphQL()
-                info = gql.get_variant_info_by_sku(it["sku"])
-                inv_item_id = info.get("inventory_item_id") if info else None
+                info = gql.get_variant_info_by_sku(it["sku"]) or {}
+                inv_item_id = info.get("inventory_item_id")
             if not inv_item_id:
-                raise RuntimeError("No se pudo determinar inventory_item_id")
-            shopify.InventoryLevel.set(location_id=location_id, inventory_item_id=inv_item_id, available=int(it["new_stock"]))
-            qm.mark_queue_status("stock_updates_queue", it["id"], "completed")
-            processed += 1
-            job.append_log(f"Stock SKU {it['sku']}: OK\n")
-        except Exception as e:
-            qm.register_error("stock_updates_queue", it["id"], str(e))
-            job.append_log(f"Error stock SKU {it['sku']}: {e}\n")
+                qm.register_error("stock_updates_queue", it["id"], "Sin inventory_item_id")
+                job.append_log(f"Error stock SKU {it['sku']}: sin inventory_item_id\n")
+                continue
+            all_quantities.append({
+                "inventoryItemId": f"gid://shopify/InventoryItem/{int(inv_item_id)}",
+                "locationId": f"gid://shopify/Location/{int(location_id)}",
+                "quantity": int(it["new_stock"]),
+                "compareQuantity": None,
+            })
+            valid_items.append(it)
+        if all_quantities:
+            try:
+                send_idx = 0
+                while send_idx < len(all_quantities):
+                    sub_batch = min(batch_limit, len(all_quantities) - send_idx)
+                    if QUEUES_ADAPTIVE_THROTTLE and getattr(gql, 'last_extensions', None) and gql.last_extensions.get("cost"):
+                        ts = gql.last_extensions["cost"].get("throttleStatus", {})
+                        current = float(ts.get("currentlyAvailable", 1000))
+                        maximum = float(ts.get("maximumAvailable", 1000))
+                        rate = float(ts.get("restoreRate", 50))
+                        # Estimar coste por ítem conservador y actualizar con última métrica si existe
+                        est_cost_per_item = 10.0
+                        try:
+                            last_req_cost = float(gql.last_extensions["cost"].get("requestedQueryCost") or 0)
+                            last_items = max(1, sub_batch)
+                            if last_req_cost > 0:
+                                est_cost_per_item = max(1.0, last_req_cost / last_items)
+                        except Exception:
+                            pass
+                        budget = min(0.8 * maximum, current + 1.0 * rate)
+                        calc = int(budget // est_cost_per_item)
+                        if calc <= 0:
+                            need = est_cost_per_item - current
+                            sleep_s = max(0, int((need / rate) + 1)) if rate > 0 else 1
+                            job.append_log(f"Throttle bajo (cur={current:.0f}/{maximum:.0f}, rate={rate:.0f}). Esperando {sleep_s}s…\n")
+                            _time.sleep(sleep_s)
+                            calc = int((current + rate * sleep_s) // est_cost_per_item)
+                        sub_batch = max(1, min(batch_limit, calc))
+
+                    quantities = all_quantities[send_idx: send_idx + sub_batch]
+                    result = gql.inventory_set_quantities(str(location_id), quantities)
+                    # Log de throttling y coste
+                    if getattr(gql, 'last_extensions', None) and gql.last_extensions.get("cost"):
+                        cost_info = gql.last_extensions["cost"]
+                        ts = cost_info.get("throttleStatus", {})
+                        job.append_log(
+                            f"Throttle: cur={ts.get('currentlyAvailable')} max={ts.get('maximumAvailable')} rate={ts.get('restoreRate')} cost={cost_info.get('requestedQueryCost')} batch={len(quantities)}\n"
+                        )
+                    user_errors = result.get("userErrors", [])
+                    if user_errors:
+                        for it in valid_items[send_idx: send_idx + sub_batch]:
+                            qm.register_error("stock_updates_queue", it["id"], f"Bulk errors: {user_errors}")
+                            job.append_log(f"Stock SKU {it['sku']}: ERROR (bulk)\n")
+                    else:
+                        for it in valid_items[send_idx: send_idx + sub_batch]:
+                            qm.mark_queue_status("stock_updates_queue", it["id"], "completed")
+                            job.append_log(f"Stock SKU {it['sku']}: OK\n")
+                            processed += 1
+                    send_idx += sub_batch
+            except Exception as e:
+                for it in valid_items:
+                    qm.register_error("stock_updates_queue", it["id"], str(e))
+                    job.append_log(f"Error stock SKU {it['sku']}: {e}\n")
+    else:
+        # Comportamiento actual: REST por ítem
+        import shopify  # type: ignore
+        for it in items:
+            try:
+                inv_item_id = it["inventory_item_id"]
+                # Si faltara, intentar resolver por SKU vía GraphQL
+                if not inv_item_id:
+                    gql = ShopifyGraphQL()
+                    info = gql.get_variant_info_by_sku(it["sku"]) or {}
+                    inv_item_id = info.get("inventory_item_id")
+                if not inv_item_id:
+                    raise RuntimeError("No se pudo determinar inventory_item_id")
+                shopify.InventoryLevel.set(location_id=location_id, inventory_item_id=inv_item_id, available=int(it["new_stock"]))
+                qm.mark_queue_status("stock_updates_queue", it["id"], "completed")
+                processed += 1
+                job.append_log(f"Stock SKU {it['sku']}: OK\n")
+            except Exception as e:
+                qm.register_error("stock_updates_queue", it["id"], str(e))
+                job.append_log(f"Error stock SKU {it['sku']}: {e}\n")
     job.append_log(f"Procesados stock (lote): {processed}\n")
     return processed
 
@@ -1700,10 +1914,21 @@ def _process_stock_queues(job: Job, batch_limit: int = 50) -> int:
 def _run_queue_job(job: Job, process_type: str = "all", batch_limit: int = 50, margin: float = PRICE_MARGIN):
     job.status = "running"
     try:
-        if process_type in ("all", "prices"):
-            _process_price_queues(job, batch_limit=batch_limit, margin=margin)
-        if process_type in ("all", "stock"):
-            _process_stock_queues(job, batch_limit=batch_limit)
+        if not QUEUES_DRAIN_CONTINUOUS:
+            if process_type in ("all", "prices"):
+                _process_price_queues(job, batch_limit=batch_limit, margin=margin)
+            if process_type in ("all", "stock"):
+                _process_stock_queues(job, batch_limit=batch_limit)
+        else:
+            # Drenar en bucle hasta vaciar o no haber progreso
+            while True:
+                p = s = 0
+                if process_type in ("all", "prices"):
+                    p = _process_price_queues(job, batch_limit=batch_limit, margin=margin)
+                if process_type in ("all", "stock"):
+                    s = _process_stock_queues(job, batch_limit=batch_limit)
+                if (p + s) == 0:
+                    break
         job.status = "done"
     except Exception as e:
         logging.exception("Error en procesamiento de colas")
